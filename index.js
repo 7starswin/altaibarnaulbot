@@ -12,6 +12,9 @@ const ADMIN_IDS = process.env.ADMIN_IDS
 
 const sessions = {}
 
+// ===== NEW: store last admin for each user (for user replies) =====
+const userLastAdmin = {}
+
 function getSession(userId){
  if(!sessions[userId]){
   sessions[userId] = {
@@ -223,6 +226,30 @@ Please enter your Player ID:`
 bot.on("text",(ctx)=>{
 
  const session = getSession(ctx.from.id)
+ const userId = ctx.from.id
+
+ // ===== NEW: User replies to admin (if they are not in an active session) =====
+ if (!ADMIN_IDS.includes(userId) && !session.state) {
+   // Not an admin and not in a support flow → treat as reply to last admin
+   const adminId = userLastAdmin[userId]
+   if (adminId) {
+     // Forward message to that admin
+     bot.telegram.sendMessage(
+       adminId,
+       `✉️ Reply from user @${ctx.from.username || ctx.from.first_name} (ID: ${userId}):\n\n${ctx.message.text}`,
+       Markup.inlineKeyboard([
+         [Markup.button.callback("💬 Reply to user", `reply_${userId}`)]
+       ])
+     ).catch(() => {
+       // If admin can't be reached, inform user
+       ctx.reply("Sorry, we couldn't deliver your message. Please try again later.")
+     })
+     return
+   } else {
+     // No active admin conversation – maybe ignore or suggest starting a ticket
+     return
+   }
+ }
 
  // Existing user flow: waiting for player ID
  if(session.state==="waiting_player_id"){
@@ -231,8 +258,7 @@ bot.on("text",(ctx)=>{
    return
  }
 
- // ========== NEW: Admin reply functionality ==========
- const userId = ctx.from.id
+ // ===== NEW: Admin reply functionality =====
  if (ADMIN_IDS.includes(userId) && session.state === "admin_reply") {
    const targetUserId = session.data.targetUserId
    if (!targetUserId) {
@@ -242,10 +268,13 @@ bot.on("text",(ctx)=>{
    }
 
    // Send the admin's message to the original user
-   bot.telegram.sendMessage(targetUserId, 
+   bot.telegram.sendMessage(
+     targetUserId,
      `✉️ Admin reply:\n\n${ctx.message.text}`
    ).then(() => {
      ctx.reply("✅ Your reply has been sent to the user.")
+     // Store which admin last replied to this user (so user can reply back)
+     userLastAdmin[targetUserId] = userId
    }).catch(() => {
      ctx.reply("❌ Failed to send message. The user might have blocked the bot.")
    })
@@ -367,11 +396,13 @@ bot.action("submit_player",async(ctx)=>{
  session.submitting=true
 
  const requestId = Math.floor(1000+Math.random()*9000)
+ const userId = ctx.from.id
 
+ // ===== NEW: Include userId in resolve callback data =====
  const message = `🎫 Player Request #${requestId}
 
 User: ${ctx.from.first_name}
-Telegram ID: ${ctx.from.id}
+Telegram ID: ${userId}
 
 Country: ${session.data.country}
 Issue: ${session.data.issueType}
@@ -391,8 +422,8 @@ Date: ${session.data.date}`
  reply_markup:{
  inline_keyboard:[
  [
- {text:"💬 Reply",callback_data:`reply_${ctx.from.id}`},
- {text:"✅ Resolved",callback_data:`resolve_${requestId}`}
+ {text:"💬 Reply",callback_data:`reply_${userId}`},
+ {text:"✅ Resolved",callback_data:`resolve_${requestId}_${userId}`}
  ]
  ]
  }
@@ -409,8 +440,8 @@ Date: ${session.data.date}`
  reply_markup:{
  inline_keyboard:[
  [
- {text:"💬 Reply",callback_data:`reply_${ctx.from.id}`},
- {text:"✅ Resolved",callback_data:`resolve_${requestId}`}
+ {text:"💬 Reply",callback_data:`reply_${userId}`},
+ {text:"✅ Resolved",callback_data:`resolve_${requestId}_${userId}`}
  ]
  ]
  }
@@ -434,19 +465,57 @@ Admin team will respond shortly.`,
 
 // ================= ADMIN ACTIONS =================
 
-bot.action(/resolve_(.+)/,(ctx)=>{
+// ===== NEW: Resolve action with rating prompt =====
+bot.action(/resolve_(\d+)_(\d+)/, async (ctx) => {
+  const requestId = ctx.match[1]
+  const userId = parseInt(ctx.match[2])
+  const adminId = ctx.from.id
 
- ctx.answerCbQuery("Ticket marked resolved")
+  // Answer callback and remove buttons from admin message
+  ctx.answerCbQuery("Ticket marked resolved")
+  ctx.editMessageReplyMarkup({ inline_keyboard: [] })
 
- ctx.editMessageReplyMarkup({inline_keyboard:[]})
-
+  // Send rating prompt to user
+  await bot.telegram.sendMessage(
+    userId,
+    `✅ Your request #${requestId} has been resolved.\n\nPlease rate your experience:`,
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback("1⭐ Best", `rate_${requestId}_${adminId}_1`),
+        Markup.button.callback("2⭐ Good", `rate_${requestId}_${adminId}_2`),
+        Markup.button.callback("3⭐ Poor", `rate_${requestId}_${adminId}_3`),
+      ]
+    ])
+  )
 })
 
-// ========== NEW: Admin reply handler ==========
+// ===== NEW: Handle rating selection =====
+bot.action(/rate_(\d+)_(\d+)_(\d)/, async (ctx) => {
+  const requestId = ctx.match[1]
+  const adminId = parseInt(ctx.match[2])
+  const rating = ctx.match[3] // 1,2,3
+  const userId = ctx.from.id
+
+  let ratingText = ""
+  if (rating === "1") ratingText = "1⭐ Best"
+  else if (rating === "2") ratingText = "2⭐ Good"
+  else if (rating === "3") ratingText = "3⭐ Poor"
+
+  // Notify admin
+  await bot.telegram.sendMessage(
+    adminId,
+    `📊 User @${ctx.from.username || ctx.from.first_name} (ID: ${userId}) rated request #${requestId} as: ${ratingText}`
+  )
+
+  // Thank user
+  ctx.editMessageText("Thank you for your feedback! 🙏")
+  ctx.answerCbQuery()
+})
+
+// ===== NEW: Admin reply handler (same as before but we store mapping) =====
 bot.action(/reply_(\d+)/, (ctx) => {
   const adminId = ctx.from.id
 
-  // Ensure only admins can use this
   if (!ADMIN_IDS.includes(adminId)) {
     return ctx.answerCbQuery("You are not authorized")
   }

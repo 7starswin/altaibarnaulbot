@@ -1,122 +1,46 @@
 const { Telegraf, Markup } = require("telegraf")
-
-const { playerFlow } = require("./flows/playerFlow")
-const { promoFlow } = require("./flows/promoFlow")
-const { agentFlow } = require("./flows/agentFlow")
-const { settingsFlow } = require("./flows/settingsFlow")
-
-const { getUserData, saveUser } = require("./utils/db")
-const { loadLanguage } = require("./utils/i18n")
+const User = require("./models/User")
 
 const bot = new Telegraf(process.env.BOT_TOKEN)
 
-const adminChatIds = process.env.ADMIN_IDS.split(",")
+bot.start(async (ctx) => {
+  const telegramId = ctx.from.id
 
-const sessions = {}
+  let user = await User.findOne({ telegramId })
 
-function getSession(userId){
-if(!sessions[userId]) sessions[userId] = {}
-return sessions[userId]
-}
+  if (!user) {
+    return ctx.reply(
+      "📱 Please share your phone number to register",
+      Markup.keyboard([
+        [Markup.button.contactRequest("Share Phone Number")]
+      ]).resize()
+    )
+  }
 
-function clearSession(userId){
-delete sessions[userId]
-}
-
-function mainMenu(ctx,texts){
-
-return ctx.reply(
-`🔥 ${texts.main_menu}`,
-Markup.inlineKeyboard([
-
-[
-Markup.button.callback("👤 Player Support","menu_player"),
-Markup.button.callback("🎨 Promo Banner","menu_promo")
-],
-
-[
-Markup.button.callback("🧑‍💼 Become Agent","menu_agent")
-],
-
-[
-Markup.button.callback("⚙️ Settings","menu_settings")
-]
-
-])
-)
-
-}
-
-bot.start(async(ctx)=>{
-
-const userId = ctx.from.id
-
-let user = await getUserData(userId)
-
-if(!user){
-
-await ctx.reply(
-"📱 Please share phone number",
-Markup.keyboard([
-[Markup.button.contactRequest("Share Phone")]
-]).resize()
-)
-
-return
-}
-
-const texts = loadLanguage(user.language || "en")
-
-return mainMenu(ctx,texts)
-
+  return ctx.reply(
+    "🔥 Welcome to the bot",
+    Markup.inlineKeyboard([
+      [Markup.button.callback("👤 Player Support", "player")],
+      [Markup.button.callback("🎨 Promo Banner", "promo")],
+      [Markup.button.callback("🧑‍💼 Become Agent", "agent")]
+    ])
+  )
 })
 
-bot.on("contact", async(ctx)=>{
+bot.on("contact", async (ctx) => {
+  const telegramId = ctx.from.id
 
-const userId = ctx.from.id
+  await User.create({
+    telegramId,
+    name: ctx.from.first_name,
+    phone: ctx.message.contact.phone_number
+  })
 
-await saveUser({
-telegramId:userId,
-name:ctx.from.first_name,
-phone:ctx.message.contact.phone_number,
-language:"en"
+  ctx.reply("✅ Registration successful")
 })
 
-return ctx.reply("✅ Registration Complete")
-
-})
-
-bot.action("back_to_main",async(ctx)=>{
-
-const user = await getUserData(ctx.from.id)
-const texts = loadLanguage(user.language || "en")
-
-return mainMenu(ctx,texts)
-
-})
-
-bot.action("menu_player",(ctx)=>{
-
-return playerFlow(ctx,bot,adminChatIds,getSession,clearSession)
-
-})
-
-bot.action("menu_promo",(ctx)=>{
-
-return promoFlow(ctx,bot,adminChatIds,getSession,clearSession)
-
-})
-
-bot.action("menu_agent",(ctx)=>{
-
-return agentFlow(ctx,bot,adminChatIds,getSession,clearSession)
-
-})
-
-bot.action("menu_settings",(ctx)=>{
-
-return settingsFlow(ctx,bot,getSession)
-
-})
+bot.action("player", (ctx) => ctx.reply("Player support coming soon"))
+bot.action("promo", (ctx) => ctx.reply("Promo generator coming soon"))
+bot.action("agent", (ctx) => ctx.reply("Agent system coming soon"))
 
 module.exports = bot

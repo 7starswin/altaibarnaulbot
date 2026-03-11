@@ -3,7 +3,7 @@ const fs = require("fs").promises
 const fsSync = require("fs")
 const path = require("path")
 const { Telegraf, Markup } = require("telegraf")
-const sharp = require("sharp")
+const sharp = require("sharp")          // Make sure this is installed
 
 const bot = new Telegraf(process.env.BOT_TOKEN)
 
@@ -19,7 +19,7 @@ const PROMO_FILE = "./promo.json"
 // Load or initialize data
 let pendingTickets = []
 let allUsers = new Set()
-let promoActivities = []  // { userId, username, promoCode, language, timestamp }
+let promoActivities = []
 
 try {
   if (fsSync.existsSync(TICKETS_FILE)) {
@@ -61,7 +61,7 @@ function savePromo() {
   fsSync.writeFileSync(PROMO_FILE, JSON.stringify(promoActivities, null, 2))
 }
 
-// ================= SESSIONS (in‑memory only) =================
+// ================= SESSIONS =================
 const sessions = {}
 const userLastAdmin = {}
 
@@ -136,7 +136,6 @@ const translations = {
     download_app: "Download App",
     error_processing_banners: "Error processing banners. Please try again later."
   }
-  // For simplicity, we use English for all languages. You can expand later.
 }
 
 function loadLanguage(lang) {
@@ -180,7 +179,6 @@ async function logToAdmin(bot, adminIds, message) {
 }
 
 async function saveSubmission(data) {
-  // data: { userId, type, data: { promoCode, bannerLanguage, filesDelivered, totalFiles, failedFiles } }
   const entry = {
     userId: data.userId,
     username: sessions[data.userId]?.username || null,
@@ -243,7 +241,7 @@ bot.hears("💰 Affiliate Support", async (ctx) => {
   session.state = "affiliate_start"
   session.data.type = "affiliate"
 
-  const texts = loadLanguage("en") // you can store preferred language per user later
+  const texts = loadLanguage("en")
 
   await ctx.reply(
     `🤝 **${texts.affiliate_options}**\n\n${texts.choose_your_option}:`,
@@ -333,7 +331,7 @@ bot.action("affiliate_promo_banner", async (ctx) => {
 })
 
 bot.action(/promo_lang_(.+)/, async (ctx) => {
-  const lang = ctx.match[1] // en, bn, hi, pk
+  const lang = ctx.match[1]
   const userId = ctx.from.id
   const session = getSession(userId)
 
@@ -347,13 +345,13 @@ bot.action(/promo_lang_(.+)/, async (ctx) => {
   )
 })
 
-// ================= TEXT HANDLER (including promo code) =================
+// ================= TEXT HANDLER =================
 bot.on("text", async (ctx) => {
   const session = getSession(ctx.from.id)
   const userId = ctx.from.id
   recordUser(userId)
 
-  // --- ADMIN BROADCAST STATE ---
+  // ADMIN BROADCAST
   if (ADMIN_IDS.includes(userId) && session.state === "admin_broadcast") {
     const message = ctx.message.text
     let successCount = 0
@@ -378,7 +376,7 @@ bot.on("text", async (ctx) => {
     return
   }
 
-  // --- USER REPLY TO ADMIN (outside ticket flow) ---
+  // USER REPLY TO ADMIN
   if (!ADMIN_IDS.includes(userId) && !session.state) {
     const adminId = userLastAdmin[userId]
     if (adminId) {
@@ -398,7 +396,7 @@ bot.on("text", async (ctx) => {
     return
   }
 
-  // --- ADMIN REPLY ---
+  // ADMIN REPLY
   if (ADMIN_IDS.includes(userId) && session.state === "admin_reply") {
     const targetUserId = session.data.targetUserId
     if (!targetUserId) {
@@ -418,7 +416,7 @@ bot.on("text", async (ctx) => {
     return
   }
 
-  // --- PROMO CODE WAITING ---
+  // PROMO CODE WAITING
   if (session.state === "waiting_promo_code") {
     const promoCode = ctx.message.text.trim()
     if (promoCode.length > 10) {
@@ -430,7 +428,7 @@ bot.on("text", async (ctx) => {
     return
   }
 
-  // --- SUPPORT FLOW: handle each state ---
+  // SUPPORT FLOW
   if (session.state === "waiting_game_user_id") {
     session.data.gameUserId = ctx.message.text
     session.state = "waiting_phone_number"
@@ -467,7 +465,7 @@ bot.on("text", async (ctx) => {
 async function deliverPromoMaterials(ctx, session, userId) {
   const { bannerLanguage, promoCode } = session.data
   const texts = loadLanguage("en")
-  const userData = { name: ctx.from.first_name } // we don't store full user data, but we can use first_name
+  const userData = { name: ctx.from.first_name }
 
   try {
     if (!promoCode || promoCode.length > 10) {
@@ -502,7 +500,6 @@ async function deliverPromoMaterials(ctx, session, userId) {
         const inputPath = path.join(folderPath, fileName)
         const outputPath = path.join(tempFolder, `${promoCode}_${fileName}`)
 
-        // Read image and add text overlay
         const image = sharp(inputPath)
         const { width, height } = await image.metadata()
         const fontSize = Math.max(54, Math.min(width * 0.091, 115))
@@ -615,7 +612,7 @@ bot.on(["photo", "video"], async (ctx) => {
   const userId = ctx.from.id
   recordUser(userId)
 
-  // --- USER REPLY TO ADMIN (file) ---
+  // USER REPLY TO ADMIN (file)
   if (!ADMIN_IDS.includes(userId) && !session.state) {
     const adminId = userLastAdmin[userId]
     if (adminId) {
@@ -648,7 +645,7 @@ bot.on(["photo", "video"], async (ctx) => {
     return
   }
 
-  // --- SUPPORT FLOW: handle file upload ---
+  // SUPPORT FLOW: file upload
   if (session.state !== "waiting_file") return
 
   if (ctx.message.photo) {
@@ -665,7 +662,7 @@ bot.on(["photo", "video"], async (ctx) => {
   showConfirmation(ctx, session)
 })
 
-// ================= CALENDAR FUNCTIONS =================
+// ================= CALENDAR =================
 function showCalendar(ctx, session) {
   let year = session.calendar.year
   let month = session.calendar.month
@@ -749,7 +746,7 @@ bot.action("next_month", (ctx) => {
 
 bot.action("ignore", (ctx) => ctx.answerCbQuery())
 
-// ================= RESTART / MAIN MENU ACTIONS =================
+// ================= RESTART / MAIN MENU =================
 bot.action("restart_player", (ctx) => {
   const userId = ctx.from.id
   clearSession(userId)
@@ -779,7 +776,7 @@ bot.action("main_menu", (ctx) => {
   }
 })
 
-// ================= ADMIN ACTIONS (resolve & reply) =================
+// ================= ADMIN ACTIONS =================
 bot.action(/resolve_(.+)_(\d+)/, async (ctx) => {
   const trackId = ctx.match[1]
   const userId = parseInt(ctx.match[2])
@@ -850,7 +847,7 @@ bot.action(/reply_(\d+)/, (ctx) => {
   ctx.reply("✏️ Please type your reply message below. It will be sent to the user.")
 })
 
-// ================= PLAYER SUPPORT COUNTRY/ISSUE/PAYMENT =================
+// ================= PLAYER SUPPORT =================
 bot.hears("👤 Player Support", (ctx) => {
   const userId = ctx.from.id
   recordUser(userId)
@@ -1125,7 +1122,6 @@ bot.hears("📢 Broadcast", (ctx) => {
   ctx.reply("📢 Please enter the message you want to broadcast to all users:")
 })
 
-// ================= PROMO ACTIVITY ADMIN =================
 bot.hears("📊 Promo Activity", (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
   if (promoActivities.length === 0) {

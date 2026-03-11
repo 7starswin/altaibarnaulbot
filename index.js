@@ -256,7 +256,28 @@ bot.hears("🔙 Main Menu", (ctx) => {
   }
 })
 
-// ================= AFFILIATE SUPPORT =================
+// ================= USER MENU HANDLERS (MUST BE BEFORE TEXT HANDLER) =================
+bot.hears("Player Support", (ctx) => {
+  const userId = ctx.from.id
+  recordUser(userId)
+  clearSession(userId)
+
+  const session = getSession(userId)
+  session.state = "player_country_selection"
+  session.data.type = "player"
+
+  ctx.reply(
+    "👤 Player Support\n\nWhere are you from?",
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback("🇧🇩 Bangladesh", "player_select_bangladesh"),
+        Markup.button.callback("🇮🇳 India", "player_select_india")
+      ],
+      [Markup.button.callback("« Back", "main_menu")]
+    ])
+  )
+})
+
 bot.hears("Affiliate Support", async (ctx) => {
   const userId = ctx.from.id
   recordUser(userId)
@@ -278,6 +299,10 @@ bot.hears("Affiliate Support", async (ctx) => {
       [Markup.button.callback(texts.back, "main_menu")]
     ])
   )
+})
+
+bot.hears("Become Agent", (ctx) => {
+  ctx.reply("Agent registration coming soon.", userMenu())
 })
 
 // ================= AFFILIATE MANAGER =================
@@ -359,7 +384,42 @@ bot.action(/promo_lang_(.+)/, async (ctx) => {
   )
 })
 
+// ================= ADMIN MENU HANDLERS (ROBUST) =================
+// This single handler catches all admin menu buttons using a regex that matches the text part
+// It works even if the emoji is slightly different.
+bot.hears(/^(.*Deposit Problems.*|.*Withdrawal Problems.*|.*Agent Requests.*|.*Broadcast.*|.*Promo Activity.*|.*Generate Promo.*)$/, (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+
+  const text = ctx.message.text
+
+  if (text.includes("Deposit Problems")) {
+    showTicketList(ctx, "deposit", 0)
+  } else if (text.includes("Withdrawal Problems")) {
+    showTicketList(ctx, "withdrawal", 0)
+  } else if (text.includes("Agent Requests")) {
+    ctx.reply("Agent requests feature coming soon.")
+  } else if (text.includes("Broadcast")) {
+    const session = getSession(ctx.from.id)
+    session.state = "admin_broadcast"
+    ctx.reply("📢 Please enter the message you want to broadcast to all users:")
+  } else if (text.includes("Promo Activity")) {
+    if (promoActivities.length === 0) {
+      return ctx.reply("No promo activity yet.")
+    }
+    let msg = "📊 **Promo Banner Requests**\n\n"
+    const recent = [...promoActivities].reverse().slice(0, 10)
+    recent.forEach((p, i) => {
+      const user = p.username ? `@${p.username}` : `ID: ${p.userId}`
+      msg += `${i+1}. ${user} | Code: **${p.promoCode}** | Lang: ${p.language} | ${new Date(p.timestamp).toLocaleString()}\n`
+    })
+    ctx.reply(msg, { parse_mode: "Markdown" })
+  } else if (text.includes("Generate Promo")) {
+    startPromoLanguageSelection(ctx)
+  }
+})
+
 // ================= TEXT HANDLER =================
+// Must come AFTER all hears handlers to avoid blocking them
 bot.on("text", async (ctx) => {
   const session = getSession(ctx.from.id)
   const userId = ctx.from.id
@@ -390,7 +450,7 @@ bot.on("text", async (ctx) => {
     return
   }
 
-  // USER REPLY TO ADMIN
+  // USER REPLY TO ADMIN (only if no session state)
   if (!ADMIN_IDS.includes(userId) && !session.state) {
     const adminId = userLastAdmin[userId]
     if (adminId) {
@@ -853,32 +913,6 @@ bot.action(/reply_(\d+)/, (ctx) => {
   ctx.reply("✏️ Please type your reply message below. It will be sent to the user.")
 })
 
-// ================= PLAYER SUPPORT =================
-bot.hears("Player Support", (ctx) => {
-  const userId = ctx.from.id
-  recordUser(userId)
-  clearSession(userId)
-
-  const session = getSession(userId)
-  session.state = "player_country_selection"
-  session.data.type = "player"
-
-  ctx.reply(
-    "👤 Player Support\n\nWhere are you from?",
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback("🇧🇩 Bangladesh", "player_select_bangladesh"),
-        Markup.button.callback("🇮🇳 India", "player_select_india")
-      ],
-      [Markup.button.callback("« Back", "main_menu")]
-    ])
-  )
-})
-
-bot.hears("Become Agent", (ctx) => {
-  ctx.reply("Agent registration coming soon.", userMenu())
-})
-
 // ================= COUNTRY SELECTION =================
 bot.action(/player_select_(.+)/, (ctx) => {
   const country = ctx.match[1]
@@ -1105,40 +1139,6 @@ Transaction ID: ${safe(session.data.trxId)}`
   clearSession(ctx.from.id)
 })
 
-// ================= ADMIN MENU HANDLERS (ROBUST) =================
-// This single handler catches all admin menu buttons using a regex that matches the text part
-// It works even if the emoji is slightly different.
-bot.hears(/^(.*Deposit Problems.*|.*Withdrawal Problems.*|.*Agent Requests.*|.*Broadcast.*|.*Promo Activity.*|.*Generate Promo.*)$/, (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-
-  const text = ctx.message.text
-
-  if (text.includes("Deposit Problems")) {
-    showTicketList(ctx, "deposit", 0)
-  } else if (text.includes("Withdrawal Problems")) {
-    showTicketList(ctx, "withdrawal", 0)
-  } else if (text.includes("Agent Requests")) {
-    ctx.reply("Agent requests feature coming soon.")
-  } else if (text.includes("Broadcast")) {
-    const session = getSession(ctx.from.id)
-    session.state = "admin_broadcast"
-    ctx.reply("📢 Please enter the message you want to broadcast to all users:")
-  } else if (text.includes("Promo Activity")) {
-    if (promoActivities.length === 0) {
-      return ctx.reply("No promo activity yet.")
-    }
-    let msg = "📊 **Promo Banner Requests**\n\n"
-    const recent = [...promoActivities].reverse().slice(0, 10)
-    recent.forEach((p, i) => {
-      const user = p.username ? `@${p.username}` : `ID: ${p.userId}`
-      msg += `${i+1}. ${user} | Code: **${p.promoCode}** | Lang: ${p.language} | ${new Date(p.timestamp).toLocaleString()}\n`
-    })
-    ctx.reply(msg, { parse_mode: "Markdown" })
-  } else if (text.includes("Generate Promo")) {
-    startPromoLanguageSelection(ctx)
-  }
-})
-
 // ================= TICKET LIST DISPLAY FUNCTION =================
 function showTicketList(ctx, category, page) {
   const tickets = pendingTickets.filter(t => t.category === category && t.status === "open")
@@ -1229,4 +1229,4 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with User Menu Fixed & All Features")
+console.log("🚀 Bot Running with All Menu Functions Fixed")

@@ -12,7 +12,7 @@ const ADMIN_IDS = process.env.ADMIN_IDS
 const sessions = {}               // user sessions for active ticket creation
 const userLastAdmin = {}           // last admin who replied to a user
 const allUsers = new Set()         // all user IDs who ever interacted (for broadcast)
-let pendingTickets = []            // array of open tickets { trackId, userId, type, data, status, timestamp }
+let pendingTickets = []            // array of open tickets
 
 // ================= UTILITY =================
 function generateTrackId() {
@@ -36,7 +36,6 @@ function clearSession(userId) {
   delete sessions[userId]
 }
 
-// Record user interaction
 function recordUser(userId) {
   allUsers.add(userId)
 }
@@ -69,7 +68,7 @@ bot.start((ctx) => {
   }
 })
 
-// ================= MAIN MENU HANDLER (for admin back button) =================
+// ================= MAIN MENU HANDLER =================
 bot.hears("🔙 Main Menu", (ctx) => {
   if (ADMIN_IDS.includes(ctx.from.id)) {
     ctx.reply("Admin menu:", adminMenu())
@@ -79,32 +78,15 @@ bot.hears("🔙 Main Menu", (ctx) => {
 })
 
 // ================= ADMIN CATEGORY MENUS =================
+// Show paginated list of deposit tickets
 bot.hears("📥 Deposit Problems", (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
-  const deposits = pendingTickets.filter(t => t.category === "deposit" && t.status === "open")
-  if (deposits.length === 0) {
-    ctx.reply("No open deposit tickets.")
-  } else {
-    let msg = "📥 Open Deposit Tickets:\n\n"
-    deposits.forEach(t => {
-      msg += `🔹 ${t.trackId} - User ${t.userId} (${new Date(t.timestamp).toLocaleString()})\n`
-    })
-    ctx.reply(msg)
-  }
+  showTicketList(ctx, "deposit", 0)
 })
 
 bot.hears("📤 Withdrawal Problems", (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
-  const withdrawals = pendingTickets.filter(t => t.category === "withdrawal" && t.status === "open")
-  if (withdrawals.length === 0) {
-    ctx.reply("No open withdrawal tickets.")
-  } else {
-    let msg = "📤 Open Withdrawal Tickets:\n\n"
-    withdrawals.forEach(t => {
-      msg += `🔹 ${t.trackId} - User ${t.userId} (${new Date(t.timestamp).toLocaleString()})\n`
-    })
-    ctx.reply(msg)
-  }
+  showTicketList(ctx, "withdrawal", 0)
 })
 
 bot.hears("🤝 Agent Requests", (ctx) => {
@@ -117,6 +99,97 @@ bot.hears("📢 Broadcast", (ctx) => {
   const session = getSession(ctx.from.id)
   session.state = "admin_broadcast"
   ctx.reply("📢 Please enter the message you want to broadcast to all users:")
+})
+
+// ================= DISPLAY TICKET LIST (PAGINATED) =================
+function showTicketList(ctx, category, page) {
+  const tickets = pendingTickets.filter(t => t.category === category && t.status === "open")
+  const pageSize = 5
+  const totalPages = Math.ceil(tickets.length / pageSize) || 1
+  const start = page * pageSize
+  const end = start + pageSize
+  const pageTickets = tickets.slice(start, end)
+
+  if (tickets.length === 0) {
+    ctx.reply(`No open ${category} tickets.`)
+    return
+  }
+
+  const buttons = []
+  pageTickets.forEach(t => {
+    const username = t.username ? `@${t.username}` : `ID: ${t.userId}`
+    buttons.push([Markup.button.callback(
+      `${t.trackId} - ${username}`,
+      `view_${category}_${t.trackId}`
+    )])
+  })
+
+  // Navigation buttons
+  const nav = []
+  if (page > 0) {
+    nav.push(Markup.button.callback("« Previous", `${category}_page_${page - 1}`))
+  }
+  nav.push(Markup.button.callback(`Page ${page+1}/${totalPages}`, "ignore"))
+  if (page < totalPages - 1) {
+    nav.push(Markup.button.callback("Next »", `${category}_page_${page + 1}`))
+  }
+  buttons.push(nav)
+  buttons.push([Markup.button.callback("🔙 Main Menu", "main_menu")])
+
+  ctx.reply(
+    `📋 Open ${category === "deposit" ? "Deposit" : "Withdrawal"} Tickets:`,
+    Markup.inlineKeyboard(buttons)
+  )
+}
+
+// Pagination actions
+bot.action(/^(deposit|withdrawal)_page_(\d+)$/, (ctx) => {
+  const category = ctx.match[1]
+  const page = parseInt(ctx.match[2])
+  showTicketList(ctx, category, page)
+})
+
+// ================= VIEW SINGLE TICKET =================
+bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
+  const category = ctx.match[1]
+  const trackId = ctx.match[2]
+  const ticket = pendingTickets.find(t => t.trackId === trackId && t.status === "open")
+  if (!ticket) {
+    ctx.answerCbQuery("Ticket not found or already resolved.")
+    return ctx.editMessageText("Ticket not found.")
+  }
+
+  const data = ticket.data
+  const user = ticket.username ? `@${ticket.username}` : `ID: ${ticket.userId}`
+  const details = `🎫 **Ticket ${trackId}**
+
+**User:** ${user}
+**Country:** ${data.country}
+**Issue:** ${data.issueType}
+**Payment:** ${data.paymentSystem}
+**Game User ID:** ${data.gameUserId}
+**Phone:** ${data.phoneNumber}
+**Agent:** ${data.agentNumber}
+**Date:** ${data.selectedDate}
+**Time:** ${data.selectedTime}
+**Amount:** ${data.amount}
+**Trx ID:** ${data.trxId}
+**File:** ${data.fileName}`
+
+  await ctx.editMessageText(details, {
+    parse_mode: "Markdown",
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "💬 Reply", callback_data: `reply_${ticket.userId}` },
+          { text: "✅ Resolve", callback_data: `resolve_${trackId}_${ticket.userId}` }
+        ],
+        [
+          { text: "🔙 Back to list", callback_data: `${category}_page_0` }
+        ]
+      ]
+    }
+  })
 })
 
 // ================= PLAYER SUPPORT =================
@@ -150,8 +223,8 @@ bot.hears("🤝 Become Agent", (ctx) => {
   ctx.reply("Agent registration coming soon.", userMenu())
 })
 
-// ================= CALLBACK QUERIES =================
-// (all action handlers go here)
+// ================= CALLBACK QUERIES (existing ones) =================
+// (all action handlers from previous version, but we keep them; some are redefined below)
 
 // ================= COUNTRY SELECTION =================
 bot.action(/player_select_(.+)/, (ctx) => {
@@ -180,7 +253,7 @@ bot.action(/player_select_(.+)/, (ctx) => {
 bot.action("player_issue_deposit", (ctx) => {
   const session = getSession(ctx.from.id)
   session.data.issueType = "Deposit"
-  session.data.category = "deposit" // for filtering
+  session.data.category = "deposit"
 
   if (session.data.country === "bangladesh") {
     return showBangladeshPayments(ctx, session)
@@ -327,9 +400,11 @@ bot.action(/resolve_(.+)_(\d+)/, async (ctx) => {
   const userId = parseInt(ctx.match[2])
   const adminId = ctx.from.id
 
-  // Mark ticket as resolved in pendingTickets
-  const ticket = pendingTickets.find(t => t.trackId === trackId)
-  if (ticket) ticket.status = "resolved"
+  // Mark ticket as resolved
+  const ticketIndex = pendingTickets.findIndex(t => t.trackId === trackId)
+  if (ticketIndex !== -1) {
+    pendingTickets.splice(ticketIndex, 1) // remove from open list (or mark as resolved)
+  }
 
   ctx.answerCbQuery("Ticket marked resolved")
   ctx.editMessageReplyMarkup({ inline_keyboard: [] })
@@ -383,7 +458,6 @@ bot.action(/reply_(\d+)/, (ctx) => {
 })
 
 // ================= TEXT HANDLER =================
-// This single handler processes all text messages (including user replies, admin replies, form filling, broadcast)
 bot.on("text", (ctx) => {
   const session = getSession(ctx.from.id)
   const userId = ctx.from.id
@@ -397,7 +471,6 @@ bot.on("text", (ctx) => {
 
     ctx.reply(`Broadcasting to ${allUsers.size} users...`)
 
-    // Use Promise.all to track completion
     const promises = []
     allUsers.forEach((uid) => {
       promises.push(
@@ -428,7 +501,6 @@ bot.on("text", (ctx) => {
       ).catch(() => {
         ctx.reply("Sorry, we couldn't deliver your message. Please try again later.")
       })
-      // Confirmation to user
       ctx.reply("✅ Your reply has been sent to the support team.")
     } else {
       ctx.reply("You don't have an ongoing conversation. Please start a new support ticket using the menu.")
@@ -489,7 +561,7 @@ bot.on("text", (ctx) => {
   }
 })
 
-// ================= FILE HANDLER (photos/videos) =================
+// ================= FILE HANDLER =================
 bot.on(["photo", "video"], (ctx) => {
   const session = getSession(ctx.from.id)
   const userId = ctx.from.id
@@ -545,7 +617,7 @@ bot.on(["photo", "video"], (ctx) => {
   showConfirmation(ctx, session)
 })
 
-// ================= CALENDAR DISPLAY FUNCTION =================
+// ================= CALENDAR DISPLAY =================
 function showCalendar(ctx, session) {
   let year = session.calendar.year
   let month = session.calendar.month
@@ -634,12 +706,13 @@ bot.action("submit_player", async (ctx) => {
 
   const trackId = generateTrackId()
   const userId = ctx.from.id
+  const username = ctx.from.username || null
 
-  // Store ticket in pendingTickets
+  // Store ticket with username
   const ticket = {
     trackId,
     userId,
-    type: session.data.issueType,
+    username,
     category: session.data.category,
     data: { ...session.data },
     status: "open",
@@ -649,7 +722,7 @@ bot.action("submit_player", async (ctx) => {
 
   const message = `🎫 Player Request\nTrack ID: ${trackId}
 
-User: ${ctx.from.first_name}
+User: ${ctx.from.first_name} ${username ? `(@${username})` : ""}
 Telegram ID: ${userId}
 
 Country: ${session.data.country}
@@ -709,4 +782,4 @@ Transaction ID: ${session.data.trxId}`
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with Track IDs, Admin Menu & Broadcast")
+console.log("🚀 Bot Running with Enhanced Admin Panel")

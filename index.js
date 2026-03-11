@@ -583,8 +583,8 @@ bot.action(/resolve_(.+)_(\d+)/, async (ctx) => {
     `✅ Your request ${trackId} has been resolved.\n\nPlease rate your experience:`,
     Markup.inlineKeyboard([
       [
-        Markup.button.callback("1⭐ Best", `rate_${trackId}_${adminId}_1`),
-        Markup.button.callback("2⭐ Good", `rate_${trackId}_${adminId}_2`),
+        Markup.button.callback("10⭐ Best", `rate_${trackId}_${adminId}_10`),
+        Markup.button.callback("7⭐ Good", `rate_${trackId}_${adminId}_7`),
         Markup.button.callback("3⭐ Poor", `rate_${trackId}_${adminId}_3`),
       ]
     ])

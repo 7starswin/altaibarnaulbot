@@ -1,125 +1,122 @@
-require("dotenv").config()
+const { Telegraf, Markup } = require("telegraf")
 
-const TelegramBot = require("node-telegram-bot-api")
-const User = require("./models/User")
+const { playerFlow } = require("./flows/playerFlow")
+const { promoFlow } = require("./flows/promoFlow")
+const { agentFlow } = require("./flows/agentFlow")
+const { settingsFlow } = require("./flows/settingsFlow")
 
-// create bot
-const bot = new TelegramBot(process.env.BOT_TOKEN, {
-  polling: true
-})
+const { getUserData, saveUser } = require("./utils/db")
+const { loadLanguage } = require("./utils/i18n")
 
-console.log("Telegram bot started")
+const bot = new Telegraf(process.env.BOT_TOKEN)
 
-// START COMMAND
-bot.onText(/\/start (.+)/, async (msg, match) => {
+const adminChatIds = process.env.ADMIN_IDS.split(",")
 
-  const chatId = msg.chat.id
-  const code = match[1]
+const sessions = {}
 
-  let ref = null
+function getSession(userId){
+if(!sessions[userId]) sessions[userId] = {}
+return sessions[userId]
+}
 
-  if (code.startsWith("agent_")) {
-    ref = code.split("_")[1]
-  }
+function clearSession(userId){
+delete sessions[userId]
+}
 
-  try {
+function mainMenu(ctx,texts){
 
-    await User.findOneAndUpdate(
-      { telegramId: msg.from.id },
-      {
-        telegramId: msg.from.id,
-        username: msg.from.username,
-        referredBy: ref,
-        campaign: code
-      },
-      { upsert: true }
-    )
+return ctx.reply(
+`🔥 ${texts.main_menu}`,
+Markup.inlineKeyboard([
 
-    bot.sendMessage(chatId,
-`🔥 Welcome!
+[
+Markup.button.callback("👤 Player Support","menu_player"),
+Markup.button.callback("🎨 Promo Banner","menu_promo")
+],
 
-Your account is registered.
+[
+Markup.button.callback("🧑‍💼 Become Agent","menu_agent")
+],
 
-Use commands:
-/promo - get promo banner
-/agent - get referral link`
-    )
+[
+Markup.button.callback("⚙️ Settings","menu_settings")
+]
 
-  } catch (err) {
-    console.log(err)
-  }
+])
+)
 
-})
+}
 
+bot.start(async(ctx)=>{
 
-// NORMAL START
-bot.onText(/\/start/, async (msg) => {
+const userId = ctx.from.id
 
-  const chatId = msg.chat.id
+let user = await getUserData(userId)
 
-  try {
+if(!user){
 
-    await User.findOneAndUpdate(
-      { telegramId: msg.from.id },
-      {
-        telegramId: msg.from.id,
-        username: msg.from.username
-      },
-      { upsert: true }
-    )
+await ctx.reply(
+"📱 Please share phone number",
+Markup.keyboard([
+[Markup.button.contactRequest("Share Phone")]
+]).resize()
+)
 
-    bot.sendMessage(chatId,
-`🔥 Welcome to our platform!
+return
+}
 
-Commands:
-/promo
-/agent`
-    )
+const texts = loadLanguage(user.language || "en")
 
-  } catch (err) {
-    console.log(err)
-  }
+return mainMenu(ctx,texts)
 
 })
 
+bot.on("contact", async(ctx)=>{
 
-// PROMO COMMAND
-bot.onText(/\/promo/, (msg) => {
+const userId = ctx.from.id
 
-  const chatId = msg.chat.id
+await saveUser({
+telegramId:userId,
+name:ctx.from.first_name,
+phone:ctx.message.contact.phone_number,
+language:"en"
+})
 
-  bot.sendMessage(chatId,
-`🎁 PROMO BONUS
-
-Claim your bonus now!
-
-https://example.com`
-  )
+return ctx.reply("✅ Registration Complete")
 
 })
 
+bot.action("back_to_main",async(ctx)=>{
 
-// AGENT LINK
-bot.onText(/\/agent/, (msg) => {
+const user = await getUserData(ctx.from.id)
+const texts = loadLanguage(user.language || "en")
 
-  const chatId = msg.chat.id
-  const id = msg.from.id
-
-  const link = `https://t.me/YOURBOTNAME?start=agent_${id}`
-
-  bot.sendMessage(chatId,
-`🤝 Your Agent Link
-
-${link}
-
-Share this link and earn commission.`)
+return mainMenu(ctx,texts)
 
 })
 
+bot.action("menu_player",(ctx)=>{
 
-// ERROR HANDLER
-bot.on("polling_error", (err) => {
-  console.log("Polling error:", err.message)
+return playerFlow(ctx,bot,adminChatIds,getSession,clearSession)
+
+})
+
+bot.action("menu_promo",(ctx)=>{
+
+return promoFlow(ctx,bot,adminChatIds,getSession,clearSession)
+
+})
+
+bot.action("menu_agent",(ctx)=>{
+
+return agentFlow(ctx,bot,adminChatIds,getSession,clearSession)
+
+})
+
+bot.action("menu_settings",(ctx)=>{
+
+return settingsFlow(ctx,bot,getSession)
+
 })
 
 module.exports = bot

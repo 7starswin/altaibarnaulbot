@@ -3,30 +3,34 @@ require("dotenv").config()
 const express = require("express")
 const connectDB = require("./config/database")
 
-const adminRoutes = require("./routes/admin")
-
+// start telegram bot
 require("./bot")
 
 const app = express()
 
+app.use(express.json())
+app.use(express.urlencoded({ extended: true }))
+
+// connect database
 connectDB()
 
-app.use(express.urlencoded({extended:true}))
-app.use(express.json())
-
-app.use("/admin",adminRoutes)
-
-app.get("/",(req,res)=>{
-
- res.send("Bot running")
-
+// test route
+app.get("/", (req, res) => {
+  res.send("Telegram Marketing Bot Running")
 })
 
-app.listen(process.env.PORT,()=>{
+// start server
+const PORT = process.env.PORT || 3000
 
- console.log("Server started")
-
+app.listen(PORT, () => {
+  console.log("Server started")
 })
 
-process.on("unhandledRejection",console.error)
-process.on("uncaughtException",console.error)
+// prevent crash
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled Rejection:", err)
+})
+
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception:", err)
+})

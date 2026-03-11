@@ -64,171 +64,392 @@ bot.start(ctx=>{
 
 // ================= PLAYER SUPPORT =================
 
-bot.hears("👤 Player Support",ctx=>{
+bot.hears("👤 Player Support", async (ctx) => {
 
- const s=session(ctx.from.id)
- s.step="country"
+const session = getSession(ctx.from.id)
 
- ctx.reply(
- "Where are you from?",
- Markup.inlineKeyboard([
- [
- Markup.button.callback("🇧🇩 Bangladesh","country_bd"),
- Markup.button.callback("🇮🇳 India","country_in")
- ],
- [
- Markup.button.callback("🇵🇰 Pakistan","country_pk"),
- Markup.button.callback("🇹🇷 Turkey","country_tr")
- ],
- [
- Markup.button.callback("🇹🇭 Thailand","country_th"),
- Markup.button.callback("🇪🇬 Egypt","country_eg")
- ]
- ])
- )
+clearSession(ctx.from.id)
 
-})
+session.state = "player_country_selection"
+session.data = { type: "player", language: "en" }
 
-// ================= COUNTRY SELECT =================
-
-bot.action(/country_(.+)/,ctx=>{
-
- const s=session(ctx.from.id)
-
- s.data.country=ctx.match[1]
-
- s.step="type"
-
- ctx.editMessageText(
- "Select Issue Type",
- Markup.inlineKeyboard([
- [Markup.button.callback("Deposit Issue","deposit")],
- [Markup.button.callback("Withdraw Issue","withdraw")]
- ])
- )
+return ctx.reply(
+"👤 Player Support\n\nWhere are you from?",
+Markup.inlineKeyboard([
+[
+Markup.button.callback("🇧🇩 Bangladesh", "player_select_bangladesh"),
+Markup.button.callback("🇮🇳 India", "player_select_india")
+],
+[
+Markup.button.callback("« Back", "main_menu")
+]
+])
+)
 
 })
 
-// ================= DEPOSIT =================
 
-bot.action("deposit",ctx=>{
+// ================= COUNTRY =================
 
- const s=session(ctx.from.id)
+bot.action(/player_select_(.+)/, async (ctx) => {
 
- s.data.type="deposit"
- s.step="payment"
+const country = ctx.match[1]
+const session = getSession(ctx.from.id)
 
- ctx.editMessageText(
- "Select Payment Method",
- Markup.inlineKeyboard([
- [
- Markup.button.callback("bKash","pay_bkash"),
- Markup.button.callback("Nagad","pay_nagad")
- ],
- [
- Markup.button.callback("Rocket","pay_rocket"),
- Markup.button.callback("Upay","pay_upay")
- ]
- ])
- )
+if(session.processing) return
+session.processing = true
 
-})
+session.data.country = country
+session.state = "player_issue_selection"
 
-// ================= WITHDRAW =================
+await ctx.editMessageText(
+`🌍 Player Support - ${country.toUpperCase()}
 
-bot.action("withdraw",ctx=>{
+What issue type?`,
+Markup.inlineKeyboard([
+[
+Markup.button.callback("Deposit","player_issue_deposit"),
+Markup.button.callback("Withdrawal","player_issue_withdrawal")
+],
+[
+Markup.button.callback("← Back","player_back_country")
+]
+])
+)
 
- const s=session(ctx.from.id)
-
- s.data.type="withdraw"
- s.step="payment"
-
- ctx.editMessageText(
- "Select Payment Method",
- Markup.inlineKeyboard([
- [
- Markup.button.callback("bKash","pay_bkash"),
- Markup.button.callback("Nagad","pay_nagad")
- ],
- [
- Markup.button.callback("Rocket","pay_rocket"),
- Markup.button.callback("Upay","pay_upay")
- ]
- ])
- )
+session.processing = false
 
 })
 
-// ================= PAYMENT =================
 
-bot.action(/pay_(.+)/,ctx=>{
+// ================= ISSUE TYPE =================
 
- const s=session(ctx.from.id)
+bot.action("player_issue_deposit", async (ctx)=>{
 
- s.data.payment=ctx.match[1]
+const session = getSession(ctx.from.id)
 
- s.step="playerid"
+session.data.issueType="Deposit"
 
- ctx.reply("Send your Player ID")
+if(session.data.country==="bangladesh"){
+return showBangladeshOptions(ctx,session)
+}
+
+if(session.data.country==="india"){
+return showIndiaOptions(ctx,session)
+}
+
+return askUserId(ctx,session)
 
 })
+
+
+bot.action("player_issue_withdrawal", async (ctx)=>{
+
+const session = getSession(ctx.from.id)
+
+session.data.issueType="Withdrawal"
+
+if(session.data.country==="bangladesh"){
+return showBangladeshOptions(ctx,session)
+}
+
+if(session.data.country==="india"){
+return showIndiaOptions(ctx,session)
+}
+
+return askUserId(ctx,session)
+
+})
+
+
+// ================= BANGLADESH PAYMENTS =================
+
+async function showBangladeshOptions(ctx,session){
+
+session.state="waiting_payment"
+
+return ctx.editMessageText(
+"🇧🇩 Bangladesh Payment Systems",
+Markup.inlineKeyboard([
+[
+Markup.button.callback("bKash","pay_bkash"),
+Markup.button.callback("Nagad","pay_nagad")
+],
+[
+Markup.button.callback("Rocket","pay_rocket"),
+Markup.button.callback("Upay","pay_upay")
+],
+[
+Markup.button.callback("MoneyGo","pay_moneygo"),
+Markup.button.callback("Binance","pay_binance")
+],
+[
+Markup.button.callback("Main Menu","main_menu")
+]
+])
+)
+
+}
+
+
+// ================= INDIA PAYMENTS =================
+
+async function showIndiaOptions(ctx,session){
+
+session.state="waiting_payment"
+
+return ctx.editMessageText(
+"🇮🇳 India Payment Systems",
+Markup.inlineKeyboard([
+[
+Markup.button.callback("PhonePe","pay_phonepe"),
+Markup.button.callback("PayTM UPI","pay_paytm")
+],
+[
+Markup.button.callback("Main Menu","main_menu")
+]
+])
+)
+
+}
+
+
+// ================= PAYMENT SELECT =================
+
+bot.action(/pay_(.+)/,async(ctx)=>{
+
+const payment=ctx.match[1]
+const session=getSession(ctx.from.id)
+
+session.data.paymentSystem=payment
+
+return askPlayerIdForWithdrawal(ctx,session,payment)
+
+})
+
 
 // ================= PLAYER ID =================
 
-bot.on("text",async ctx=>{
+async function askPlayerIdForWithdrawal(ctx,session,payment){
 
- const s=session(ctx.from.id)
+session.state="waiting_player_id_withdrawal"
 
- // PLAYER ID STEP
- if(s.step==="playerid"){
+await ctx.reply(
+`📢 ${session.data.issueType} – ${payment}
 
- s.data.playerId=ctx.message.text
- s.step="date"
+Please enter your Player ID:`)
 
- return ctx.reply("Send transaction date")
- }
+}
 
- // DATE STEP
- if(s.step==="date"){
 
- s.data.date=ctx.message.text
+// ================= TEXT INPUT =================
 
- const ticket=Math.floor(1000+Math.random()*9000)
+bot.on("text",async(ctx)=>{
 
- await Ticket.create({
- ticket,
- userId:ctx.from.id,
- country:s.data.country,
- type:s.data.type,
- payment:s.data.payment,
- playerId:s.data.playerId,
- date:s.data.date
- })
+const session=getSession(ctx.from.id)
 
- // SEND TO ADMINS
- for(const admin of ADMIN_IDS){
+if(session.state==="waiting_player_id_withdrawal"){
 
- bot.telegram.sendMessage(
- admin,
- `🎫 New Ticket #${ticket}
+session.data.userId=ctx.message.text
 
-User: ${ctx.from.id}
-Country: ${s.data.country}
-Type: ${s.data.type}
-Payment: ${s.data.payment}
-Player ID: ${s.data.playerId}
-Date: ${s.data.date}`
- )
+return showDatePicker(ctx,session)
 
- }
+}
 
- ctx.reply(`✅ Ticket Submitted
+})
 
-Ticket ID: ${ticket}`)
 
- clear(ctx.from.id)
+// ================= DATE PICKER =================
 
- }
+async function showDatePicker(ctx,session){
+
+session.state="waiting_date"
+
+const days=[]
+
+for(let i=1;i<=31;i++){
+
+days.push(Markup.button.callback(String(i),`date_${i}`))
+
+}
+
+const keyboard=[]
+
+while(days.length){
+keyboard.push(days.splice(0,7))
+}
+
+keyboard.push([Markup.button.callback("Main Menu","main_menu")])
+
+return ctx.reply(
+"📅 Select Date",
+Markup.inlineKeyboard(keyboard)
+)
+
+}
+
+
+// ================= DATE SELECT =================
+
+bot.action(/date_(\d+)/,async(ctx)=>{
+
+const day=ctx.match[1]
+const session=getSession(ctx.from.id)
+
+session.data.date=day
+
+session.state="waiting_file"
+
+return ctx.reply(
+"📎 Please upload screenshot (photo or video)"
+)
+
+})
+
+
+// ================= FILE UPLOAD =================
+
+bot.on(["photo","video"],async(ctx)=>{
+
+const session=getSession(ctx.from.id)
+
+if(session.state!=="waiting_file") return
+
+if(ctx.message.photo){
+
+session.data.fileId=ctx.message.photo.pop().file_id
+session.data.fileType="photo"
+
+}
+
+if(ctx.message.video){
+
+session.data.fileId=ctx.message.video.file_id
+session.data.fileType="video"
+
+}
+
+return showPlayerConfirmation(ctx,session)
+
+})
+
+
+// ================= CONFIRMATION =================
+
+async function showPlayerConfirmation(ctx,session){
+
+session.state="confirm_player"
+
+let summary=`📋 Confirm Details
+
+Country: ${session.data.country}
+Issue: ${session.data.issueType}
+Payment: ${session.data.paymentSystem}
+Player ID: ${session.data.userId}
+Date: ${session.data.date}
+
+Is the information correct?`
+
+if(session.data.fileType==="photo"){
+await ctx.replyWithPhoto(session.data.fileId,{caption:summary})
+}
+else if(session.data.fileType==="video"){
+await ctx.replyWithVideo(session.data.fileId,{caption:summary})
+}
+else{
+await ctx.reply(summary)
+}
+
+return ctx.reply(
+"Confirm submission?",
+Markup.inlineKeyboard([
+[
+Markup.button.callback("Submit","submit_player_request")
+],
+[
+Markup.button.callback("Restart","restart_player")
+],
+[
+Markup.button.callback("Main Menu","main_menu")
+]
+])
+)
+
+}
+
+
+// ================= SUBMIT =================
+
+bot.action("submit_player_request",async(ctx)=>{
+
+const session=getSession(ctx.from.id)
+
+if(session.submitting) return
+session.submitting=true
+
+const requestId=Math.floor(1000+Math.random()*9000)
+
+const message=`🎫 Player Request #${requestId}
+
+User: ${ctx.from.first_name}
+Telegram ID: ${ctx.from.id}
+
+Country: ${session.data.country}
+Issue: ${session.data.issueType}
+Payment: ${session.data.paymentSystem}
+Player ID: ${session.data.userId}
+Date: ${session.data.date}
+`
+
+for(const admin of ADMIN_IDS){
+
+if(session.data.fileType==="photo"){
+
+await bot.telegram.sendPhoto(
+admin,
+session.data.fileId,
+{
+caption:message,
+reply_markup:{
+inline_keyboard:[
+[
+{ text:"💬 Reply",callback_data:`admin_reply_${ctx.from.id}` },
+{ text:"✅ Resolved",callback_data:`admin_resolve_${requestId}` }
+]
+]
+}
+}
+)
+
+}else{
+
+await bot.telegram.sendMessage(
+admin,
+message,
+{
+reply_markup:{
+inline_keyboard:[
+[
+{ text:"💬 Reply",callback_data:`admin_reply_${ctx.from.id}` },
+{ text:"✅ Resolved",callback_data:`admin_resolve_${requestId}` }
+]
+]
+}
+}
+)
+
+}
+
+}
+
+await ctx.reply(
+`✅ Request registered ${requestId}
+
+Admin team will respond shortly.`,
+userMenu()
+)
+
+clearSession(ctx.from.id)
 
 })
 

@@ -40,6 +40,11 @@ function recordUser(userId) {
   allUsers.add(userId)
 }
 
+// Helper to safely get value or "Not provided"
+function safe(val) {
+  return val !== undefined && val !== null && val !== "" ? val : "Not provided"
+}
+
 // ================= MENUS =================
 function userMenu() {
   return Markup.keyboard([
@@ -164,17 +169,17 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
   const details = `🎫 **Ticket ${trackId}**
 
 **User:** ${user}
-**Country:** ${data.country}
-**Issue:** ${data.issueType}
-**Payment:** ${data.paymentSystem}
-**Game User ID:** ${data.gameUserId}
-**Phone:** ${data.phoneNumber}
-**Agent:** ${data.agentNumber}
-**Date:** ${data.selectedDate}
-**Time:** ${data.selectedTime}
-**Amount:** ${data.amount}
-**Trx ID:** ${data.trxId}
-**File:** ${data.fileName}`
+**Country:** ${safe(data.country)}
+**Issue:** ${safe(data.issueType)}
+**Payment:** ${safe(data.paymentSystem)}
+**Game User ID:** ${safe(data.gameUserId)}
+**Phone:** ${safe(data.phoneNumber)}
+**Agent:** ${safe(data.agentNumber)}
+**Date:** ${safe(data.selectedDate)}
+**Time:** ${safe(data.selectedTime)}
+**Amount:** ${safe(data.amount)}
+**Trx ID:** ${safe(data.trxId)}
+**File:** ${safe(data.fileName)}`
 
   await ctx.editMessageText(details, {
     parse_mode: "Markdown",
@@ -222,9 +227,6 @@ bot.hears("💰 Affiliate Support", (ctx) => {
 bot.hears("🤝 Become Agent", (ctx) => {
   ctx.reply("Agent registration coming soon.", userMenu())
 })
-
-// ================= CALLBACK QUERIES (existing ones) =================
-// (all action handlers from previous version, but we keep them; some are redefined below)
 
 // ================= COUNTRY SELECTION =================
 bot.action(/player_select_(.+)/, (ctx) => {
@@ -400,26 +402,30 @@ bot.action(/resolve_(.+)_(\d+)/, async (ctx) => {
   const userId = parseInt(ctx.match[2])
   const adminId = ctx.from.id
 
-  // Mark ticket as resolved
+  // Remove ticket from pending list
   const ticketIndex = pendingTickets.findIndex(t => t.trackId === trackId)
   if (ticketIndex !== -1) {
-    pendingTickets.splice(ticketIndex, 1) // remove from open list (or mark as resolved)
+    pendingTickets.splice(ticketIndex, 1)
   }
 
   ctx.answerCbQuery("Ticket marked resolved")
   ctx.editMessageReplyMarkup({ inline_keyboard: [] })
 
-  await bot.telegram.sendMessage(
-    userId,
-    `✅ Your request ${trackId} has been resolved.\n\nPlease rate your experience:`,
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback("1⭐ Best", `rate_${trackId}_${adminId}_1`),
-        Markup.button.callback("2⭐ Good", `rate_${trackId}_${adminId}_2`),
-        Markup.button.callback("3⭐ Poor", `rate_${trackId}_${adminId}_3`),
-      ]
-    ])
-  )
+  try {
+    await bot.telegram.sendMessage(
+      userId,
+      `✅ Your request ${trackId} has been resolved.\n\nPlease rate your experience:`,
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback("1⭐ Best", `rate_${trackId}_${adminId}_1`),
+          Markup.button.callback("2⭐ Good", `rate_${trackId}_${adminId}_2`),
+          Markup.button.callback("3⭐ Poor", `rate_${trackId}_${adminId}_3`),
+        ]
+      ])
+    )
+  } catch (error) {
+    console.error("Failed to send rating prompt to user:", error)
+  }
 })
 
 bot.action(/rate_(.+)_(\d+)_(\d)/, async (ctx) => {
@@ -433,10 +439,14 @@ bot.action(/rate_(.+)_(\d+)_(\d)/, async (ctx) => {
   else if (rating === "2") ratingText = "2⭐ Good"
   else if (rating === "3") ratingText = "3⭐ Poor"
 
-  await bot.telegram.sendMessage(
-    adminId,
-    `📊 User @${ctx.from.username || ctx.from.first_name} (ID: ${userId}) rated request ${trackId} as: ${ratingText}`
-  )
+  try {
+    await bot.telegram.sendMessage(
+      adminId,
+      `📊 User @${ctx.from.username || ctx.from.first_name} (ID: ${userId}) rated request ${trackId} as: ${ratingText}`
+    )
+  } catch (error) {
+    console.error("Failed to send rating to admin:", error)
+  }
 
   ctx.editMessageText("Thank you for your feedback! 🙏")
   ctx.answerCbQuery()
@@ -668,17 +678,17 @@ async function showConfirmation(ctx, session) {
 
   const summary = `📋 Confirm Your Details
 
-country: ${session.data.country}
-issueType: ${session.data.issueType}
-paymentSystem: ${session.data.paymentSystem}
-gameUserId: ${session.data.gameUserId}
-phoneNumber: ${session.data.phoneNumber}
-agentNumber: ${session.data.agentNumber}
-selectedDate: ${session.data.selectedDate}
-selectedTime: ${session.data.selectedTime}
-amount: ${session.data.amount}
-trxId: ${session.data.trxId}
-fileName: ${session.data.fileName}
+country: ${safe(session.data.country)}
+issueType: ${safe(session.data.issueType)}
+paymentSystem: ${safe(session.data.paymentSystem)}
+gameUserId: ${safe(session.data.gameUserId)}
+phoneNumber: ${safe(session.data.phoneNumber)}
+agentNumber: ${safe(session.data.agentNumber)}
+selectedDate: ${safe(session.data.selectedDate)}
+selectedTime: ${safe(session.data.selectedTime)}
+amount: ${safe(session.data.amount)}
+trxId: ${safe(session.data.trxId)}
+fileName: ${safe(session.data.fileName)}
 
 Is this information correct?`
 
@@ -704,6 +714,13 @@ bot.action("submit_player", async (ctx) => {
   if (session.submitting) return
   session.submitting = true
 
+  // Validate that we have a file to send
+  if (!session.data.fileId || !session.data.fileType) {
+    ctx.reply("❌ Error: No file uploaded. Please restart the process.")
+    clearSession(ctx.from.id)
+    return
+  }
+
   const trackId = generateTrackId()
   const userId = ctx.from.id
   const username = ctx.from.username || null
@@ -725,50 +742,56 @@ bot.action("submit_player", async (ctx) => {
 User: ${ctx.from.first_name} ${username ? `(@${username})` : ""}
 Telegram ID: ${userId}
 
-Country: ${session.data.country}
-Issue: ${session.data.issueType}
-Payment: ${session.data.paymentSystem}
-Game User ID: ${session.data.gameUserId}
-Phone Number: ${session.data.phoneNumber}
-Agent Number: ${session.data.agentNumber}
-Date: ${session.data.selectedDate}
-Time: ${session.data.selectedTime}
-Amount: ${session.data.amount}
-Transaction ID: ${session.data.trxId}`
+Country: ${safe(session.data.country)}
+Issue: ${safe(session.data.issueType)}
+Payment: ${safe(session.data.paymentSystem)}
+Game User ID: ${safe(session.data.gameUserId)}
+Phone Number: ${safe(session.data.phoneNumber)}
+Agent Number: ${safe(session.data.agentNumber)}
+Date: ${safe(session.data.selectedDate)}
+Time: ${safe(session.data.selectedTime)}
+Amount: ${safe(session.data.amount)}
+Transaction ID: ${safe(session.data.trxId)}`
 
+  // Send to all admins with error handling
   for (const admin of ADMIN_IDS) {
-    if (session.data.fileType === "photo") {
-      await bot.telegram.sendPhoto(
-        admin,
-        session.data.fileId,
-        {
-          caption: message,
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: "💬 Reply", callback_data: `reply_${userId}` },
-                { text: "✅ Resolved", callback_data: `resolve_${trackId}_${userId}` }
+    try {
+      if (session.data.fileType === "photo") {
+        await bot.telegram.sendPhoto(
+          admin,
+          session.data.fileId,
+          {
+            caption: message,
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: "💬 Reply", callback_data: `reply_${userId}` },
+                  { text: "✅ Resolved", callback_data: `resolve_${trackId}_${userId}` }
+                ]
               ]
-            ]
+            }
           }
-        }
-      )
-    } else {
-      await bot.telegram.sendVideo(
-        admin,
-        session.data.fileId,
-        {
-          caption: message,
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: "💬 Reply", callback_data: `reply_${userId}` },
-                { text: "✅ Resolved", callback_data: `resolve_${trackId}_${userId}` }
+        )
+      } else {
+        await bot.telegram.sendVideo(
+          admin,
+          session.data.fileId,
+          {
+            caption: message,
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: "💬 Reply", callback_data: `reply_${userId}` },
+                  { text: "✅ Resolved", callback_data: `resolve_${trackId}_${userId}` }
+                ]
               ]
-            ]
+            }
           }
-        }
-      )
+        )
+      }
+    } catch (error) {
+      console.error(`Failed to send ticket to admin ${admin}:`, error)
+      // Optionally notify the user that some admins didn't receive it
     }
   }
 
@@ -782,4 +805,4 @@ Transaction ID: ${session.data.trxId}`
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with Enhanced Admin Panel")
+console.log("🚀 Bot Running with Enhanced Admin Panel & Crash Fixes")

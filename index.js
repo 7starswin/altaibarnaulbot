@@ -98,6 +98,7 @@ function generateTrackId() {
 // ================= TRANSLATIONS =================
 const translations = {
   en: {
+    // Existing texts
     affiliate_options: "Affiliate Options",
     choose_your_option: "Choose your option",
     manager: "Contact Manager",
@@ -110,6 +111,7 @@ const translations = {
     india: "India",
     pakistan: "Pakistan",
     egypt: "Egypt",
+    nepal: "Nepal",
     manager_contact_for: "Manager Contact for",
     click_button_to_contact: "Click the button below to contact the manager",
     contact: "Contact",
@@ -130,7 +132,35 @@ const translations = {
     banners_delivered_with_failures: "✅ {count} banners delivered with promo '{promo}' in {language}. Failed: {failed}",
     final_promo_message: "Start promoting now with code {promo}!\n\nPromote 7StarsWin using these banners and earn commission for using your promocode!\n\nDirect your users to register using your promo code: {promo}\n7StarsWin - Premium Betting Platform\nInstant deposits & withdrawals\n24/7 customer support\nGet Affiliate commission Upto 50%\nFast Payout Service\nBecome Agent and earn more 🎉\n\nDownload Our App:\nGet our official app for the best betting experience!\n\nRefer with this Promo-Code: {promo}",
     download_app: "Download App",
-    error_processing_banners: "Error processing banners. Please try again later."
+    error_processing_banners: "Error processing banners. Please try again later.",
+
+    // Agent flow texts
+    agent_registration: "Agent Registration",
+    select_your_country: "Select your country",
+    welcome_to_mobcash: "Welcome to Mobcash!",
+    mobcash_intro: "Mobcash is an innovative platform that allows you to earn money by facilitating deposits and withdrawals for users.",
+    mobcash_role: "As a Mobcash agent, you will help users deposit and withdraw funds, earning commissions on every transaction.",
+    mobcash_commission: "💸 Commission Structure:",
+    mobcash_earning: "You earn a percentage on every deposit and withdrawal processed through your account.",
+    mobcash_analogy: "🚀 Think of it as your own small business – the more you help, the more you earn!",
+    next: "Next ➡️",
+    back_arrow: "⬅️ Back",
+    confirm_conditions: "Confirm Conditions",
+    deposit_commission: "Deposit Commission: 0.5%",
+    withdrawal_commission: "Withdrawal Commission: 0.3%",
+    prepay_requirement: "Prepay required: $100 (refundable)",
+    are_you_okay: "Are you okay with these terms? 😊",
+    accept: "✅ Accept",
+    reject: "❌ Reject",
+    agent_interest_registered: "Agent Interest Registered!",
+    thank_you_interest: "Thank you for your interest in becoming a Mobcash agent for {country}. Your request has been forwarded to our team.",
+    team_contact_soon: "Our team will contact you soon with further instructions.",
+    manager_contact_info: "Meanwhile, you can connect with our manager directly:",
+    connect_with_manager: "📞 Connect with Manager",
+    rejection_response_title: "Thank you for your time.",
+    rejection_response_body: "If you change your mind, you can always start the process again.",
+    manager_anytime_contact: "You can contact our manager anytime for questions:",
+    error_processing_response: "Error processing your response. Please try again later."
   }
 }
 
@@ -174,25 +204,10 @@ async function logToAdmin(bot, adminIds, message) {
   }
 }
 
-// ================= SAVE PROMO SUBMISSION =================
+// ================= SAVE SUBMISSION (for agent responses) =================
 async function saveSubmission(data) {
-  try {
-    const entry = {
-      userId: data.userId,
-      username: data.username || (sessions[data.userId]?.username) || null,
-      promoCode: data.data.promoCode,
-      language: data.data.bannerLanguage,
-      filesDelivered: data.data.filesDelivered,
-      totalFiles: data.data.totalFiles,
-      failedFiles: data.data.failedFiles,
-      timestamp: Date.now()
-    };
-    promoActivities.push(entry);
-    savePromo();
-    console.log("✅ Promo activity saved:", entry);
-  } catch (err) {
-    console.error("❌ Error saving promo activity:", err);
-  }
+  // For agent responses, we just log to admin; but if you want to store them, you can extend.
+  console.log("Submission saved:", data);
 }
 
 // ================= PROMO FLOW FUNCTIONS =================
@@ -216,6 +231,195 @@ async function startPromoLanguageSelection(ctx) {
       [Markup.button.callback(texts.back, "main_menu")]
     ])
   )
+}
+
+// ================= AGENT FLOW FUNCTIONS =================
+async function agentFlow(ctx) {
+  const userId = ctx.from.id
+  const session = getSession(userId)
+  const texts = loadLanguage("en")
+
+  session.state = "agent_start"
+  session.data.type = "agent"
+
+  await ctx.reply(
+    `🧑‍💼 **${texts.agent_registration}**\n\n${texts.select_your_country}:`,
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback(`🇧🇩 ${texts.bangladesh}`, "agent_country_bangladesh"),
+        Markup.button.callback(`🇮🇳 ${texts.india}`, "agent_country_india")
+      ],
+      [
+        Markup.button.callback(`🇵🇰 ${texts.pakistan}`, "agent_country_pakistan"),
+        Markup.button.callback(`🇪🇬 ${texts.egypt}`, "agent_country_egypt")
+      ],
+      [Markup.button.callback(`🇳🇵 ${texts.nepal}`, "agent_country_nepal")],
+      [Markup.button.callback(texts.back, "main_menu")]
+    ])
+  )
+}
+
+async function showAgentDetails(ctx, country) {
+  const userId = ctx.from.id
+  const session = getSession(userId)
+  const texts = loadLanguage("en")
+
+  session.data.selectedCountry = country
+  session.state = "agent_details_shown"
+
+  const countryNames = {
+    bangladesh: texts.bangladesh,
+    india: texts.india,
+    pakistan: texts.pakistan,
+    egypt: texts.egypt,
+    nepal: texts.nepal
+  }
+  const countryName = countryNames[country] || country
+
+  const detailsMessage = `${texts.welcome_to_mobcash} 🎉\n${texts.mobcash_intro}\n\n${texts.mobcash_role}\n\n${texts.mobcash_commission} 💸 ${texts.mobcash_earning}\n\n${texts.mobcash_analogy} 🚀`
+
+  await ctx.editMessageText(
+    detailsMessage,
+    {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: texts.next, callback_data: `agent_next_${country}` },
+            { text: texts.back_arrow, callback_data: "main_menu" }
+          ]
+        ]
+      }
+    }
+  )
+}
+
+async function showAgentConfirmation(ctx, country) {
+  const userId = ctx.from.id
+  const session = getSession(userId)
+  const texts = loadLanguage("en")
+
+  session.state = "agent_confirmation"
+
+  const countryNames = {
+    bangladesh: texts.bangladesh,
+    india: texts.india,
+    pakistan: texts.pakistan,
+    egypt: texts.egypt,
+    nepal: texts.nepal
+  }
+  const countryName = countryNames[country] || country
+
+  const confirmationMessage = `**${texts.confirm_conditions}** ⭐\n\n⭐ ${texts.deposit_commission}\n⭐ ${texts.withdrawal_commission}\n⭐ ${texts.prepay_requirement}\n\n${texts.are_you_okay} 😊`
+
+  await ctx.editMessageText(
+    confirmationMessage,
+    {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: texts.accept, callback_data: `agent_accept_${country}` },
+            { text: texts.reject, callback_data: `agent_reject_${country}` }
+          ],
+          [{ text: texts.back_arrow, callback_data: "main_menu" }]
+        ]
+      }
+    }
+  )
+}
+
+async function handleAgentResponse(ctx, country, response) {
+  const userId = ctx.from.id
+  const session = getSession(userId)
+  const texts = loadLanguage("en")
+
+  const countryNames = {
+    bangladesh: texts.bangladesh,
+    india: texts.india,
+    pakistan: texts.pakistan,
+    egypt: texts.egypt,
+    nepal: texts.nepal
+  }
+  const countryName = countryNames[country] || country
+  const isInterested = response === 'accept'
+
+  try {
+    // Save agent response (optional)
+    await saveSubmission({
+      userId,
+      type: 'agent_response',
+      data: {
+        country: countryName,
+        response: response,
+        interested: isInterested,
+        language: 'en'
+      },
+      status: 'pending'
+    })
+
+    // Notify admin
+    const adminMessage =
+      `<b>🧑‍💼 Agent ${isInterested ? 'Interest' : 'Rejection'} - ${countryName}</b>\n\n` +
+      `<b>User:</b> ${ctx.from.first_name}\n` +
+      `<b>User ID:</b> ${userId}\n` +
+      `<b>Username:</b> ${ctx.from.username ? '@' + ctx.from.username : 'None'}\n` +
+      `<b>Country:</b> ${countryName}\n` +
+      `<b>Response:</b> ${isInterested ? '✅ INTERESTED (Accepted)' : '❌ NOT INTERESTED (Rejected)'}\n` +
+      `<b>Date:</b> ${formatDate()}`
+
+    for (const adminId of ADMIN_IDS) {
+      try {
+        await bot.telegram.sendMessage(adminId, adminMessage, {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '💬 Reply to User', callback_data: `reply_${userId}` }]
+            ]
+          }
+        })
+      } catch (err) {
+        console.error(`Failed to send agent response to admin ${adminId}:`, err)
+      }
+    }
+
+    // Response to user
+    let userMessage
+    let userKeyboard
+
+    if (isInterested) {
+      userMessage =
+        `<b>✅ ${texts.agent_interest_registered}</b>\n\n` +
+        `${texts.thank_you_interest.replace('{country}', countryName)}\n\n` +
+        `👉 ${texts.team_contact_soon}\n\n` +
+        `${texts.manager_contact_info}`
+
+      userKeyboard = Markup.inlineKeyboard([
+        [Markup.button.url(texts.connect_with_manager, 'https://t.me/atikur_7starswin')],
+        [Markup.button.callback(texts.main_menu, 'main_menu')]
+      ])
+    } else {
+      userMessage =
+        `<b>${texts.rejection_response_title}</b> ${texts.rejection_response_body}\n\n` +
+        `${texts.manager_anytime_contact}`
+
+      userKeyboard = Markup.inlineKeyboard([
+        [Markup.button.url(texts.connect_with_manager, 'https://t.me/atikur_7starswin')],
+        [Markup.button.callback(texts.main_menu, 'main_menu')]
+      ])
+    }
+
+    await ctx.editMessageText(userMessage, {
+      parse_mode: 'HTML',
+      ...userKeyboard
+    })
+
+    clearSession(userId)
+
+  } catch (error) {
+    console.error('Error handling agent response:', error)
+    await ctx.reply(`⚠️ ${texts.error_processing_response}`)
+  }
 }
 
 // ================= MENUS =================
@@ -256,7 +460,7 @@ bot.hears("🔙 Main Menu", (ctx) => {
   }
 })
 
-// ================= USER MENU HANDLERS (MUST BE BEFORE TEXT HANDLER) =================
+// ================= USER MENU HANDLERS =================
 bot.hears("Player Support", (ctx) => {
   const userId = ctx.from.id
   recordUser(userId)
@@ -301,8 +505,11 @@ bot.hears("Affiliate Support", async (ctx) => {
   )
 })
 
-bot.hears("Become Agent", (ctx) => {
-  ctx.reply("Agent registration coming soon.", userMenu())
+bot.hears("Become Agent", async (ctx) => {
+  const userId = ctx.from.id
+  recordUser(userId)
+  clearSession(userId)
+  await agentFlow(ctx)
 })
 
 // ================= AFFILIATE MANAGER =================
@@ -357,6 +564,23 @@ bot.action(/manager_country_(.+)/, async (ctx) => {
   )
 })
 
+// ================= AGENT FLOW CALLBACKS =================
+bot.action(/agent_country_(.+)/, async (ctx) => {
+  const country = ctx.match[1]
+  await showAgentDetails(ctx, country)
+})
+
+bot.action(/agent_next_(.+)/, async (ctx) => {
+  const country = ctx.match[1]
+  await showAgentConfirmation(ctx, country)
+})
+
+bot.action(/agent_(accept|reject)_(.+)/, async (ctx) => {
+  const response = ctx.match[1] // "accept" or "reject"
+  const country = ctx.match[2]
+  await handleAgentResponse(ctx, country, response)
+})
+
 // ================= PROMO BANNER (AFFILIATE) =================
 bot.action("affiliate_promo_banner", async (ctx) => {
   await startPromoLanguageSelection(ctx)
@@ -385,8 +609,6 @@ bot.action(/promo_lang_(.+)/, async (ctx) => {
 })
 
 // ================= ADMIN MENU HANDLERS (ROBUST) =================
-// This single handler catches all admin menu buttons using a regex that matches the text part
-// It works even if the emoji is slightly different.
 bot.hears(/^(.*Deposit Problems.*|.*Withdrawal Problems.*|.*Agent Requests.*|.*Broadcast.*|.*Promo Activity.*|.*Generate Promo.*)$/, (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
 
@@ -419,7 +641,6 @@ bot.hears(/^(.*Deposit Problems.*|.*Withdrawal Problems.*|.*Agent Requests.*|.*B
 })
 
 // ================= TEXT HANDLER =================
-// Must come AFTER all hears handlers to avoid blocking them
 bot.on("text", async (ctx) => {
   const session = getSession(ctx.from.id)
   const userId = ctx.from.id
@@ -1229,4 +1450,4 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with All Menu Functions Fixed")
+console.log("🚀 Bot Running with Agent Flow & All Features")

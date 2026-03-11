@@ -1,5 +1,5 @@
 require("dotenv").config()
-
+const fs = require("fs")
 const { Telegraf, Markup } = require("telegraf")
 
 const bot = new Telegraf(process.env.BOT_TOKEN)
@@ -8,16 +8,44 @@ const ADMIN_IDS = process.env.ADMIN_IDS
   ? process.env.ADMIN_IDS.split(",").map(Number)
   : []
 
-// ================= IN-MEMORY STORAGE =================
-const sessions = {}               // user sessions for active ticket creation
-const userLastAdmin = {}           // last admin who replied to a user
-const allUsers = new Set()         // all user IDs who ever interacted (for broadcast)
-let pendingTickets = []            // array of open tickets
+// ================= PERSISTENT STORAGE =================
+const TICKETS_FILE = "./tickets.json"
+const USERS_FILE = "./users.json"
 
-// ================= UTILITY =================
-function generateTrackId() {
-  return `TKT-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`
+// Load or initialize data
+let pendingTickets = []
+let allUsers = new Set()
+
+try {
+  if (fs.existsSync(TICKETS_FILE)) {
+    const data = fs.readFileSync(TICKETS_FILE, "utf8")
+    pendingTickets = JSON.parse(data)
+  }
+} catch (err) {
+  console.error("Error loading tickets:", err)
 }
+
+try {
+  if (fs.existsSync(USERS_FILE)) {
+    const data = fs.readFileSync(USERS_FILE, "utf8")
+    allUsers = new Set(JSON.parse(data))
+  }
+} catch (err) {
+  console.error("Error loading users:", err)
+}
+
+// Save functions
+function saveTickets() {
+  fs.writeFileSync(TICKETS_FILE, JSON.stringify(pendingTickets, null, 2))
+}
+
+function saveUsers() {
+  fs.writeFileSync(USERS_FILE, JSON.stringify([...allUsers]))
+}
+
+// ================= SESSIONS (in‑memory only) =================
+const sessions = {}
+const userLastAdmin = {}
 
 function getSession(userId) {
   if (!sessions[userId]) {
@@ -37,7 +65,10 @@ function clearSession(userId) {
 }
 
 function recordUser(userId) {
-  allUsers.add(userId)
+  if (!allUsers.has(userId)) {
+    allUsers.add(userId)
+    saveUsers()
+  }
 }
 
 // Helper to safely get value or "Not provided"
@@ -83,7 +114,6 @@ bot.hears("🔙 Main Menu", (ctx) => {
 })
 
 // ================= ADMIN CATEGORY MENUS =================
-// Show paginated list of deposit tickets
 bot.hears("📥 Deposit Problems", (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
   showTicketList(ctx, "deposit", 0)
@@ -406,6 +436,7 @@ bot.action(/resolve_(.+)_(\d+)/, async (ctx) => {
   const ticketIndex = pendingTickets.findIndex(t => t.trackId === trackId)
   if (ticketIndex !== -1) {
     pendingTickets.splice(ticketIndex, 1)
+    saveTickets()
   }
 
   ctx.answerCbQuery("Ticket marked resolved")
@@ -736,6 +767,7 @@ bot.action("submit_player", async (ctx) => {
     timestamp: Date.now()
   }
   pendingTickets.push(ticket)
+  saveTickets()
 
   const message = `🎫 Player Request\nTrack ID: ${trackId}
 
@@ -791,7 +823,6 @@ Transaction ID: ${safe(session.data.trxId)}`
       }
     } catch (error) {
       console.error(`Failed to send ticket to admin ${admin}:`, error)
-      // Optionally notify the user that some admins didn't receive it
     }
   }
 
@@ -805,4 +836,4 @@ Transaction ID: ${safe(session.data.trxId)}`
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with Enhanced Admin Panel & Crash Fixes")
+console.log("🚀 Bot Running with Persistent Storage & Crash Fixes")

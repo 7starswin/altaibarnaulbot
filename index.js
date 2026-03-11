@@ -76,6 +76,11 @@ function safe(val) {
   return val !== undefined && val !== null && val !== "" ? val : "Not provided"
 }
 
+// ================= UTILITY =================
+function generateTrackId() {
+  return `TKT-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`
+}
+
 // ================= MENUS =================
 function userMenu() {
   return Markup.keyboard([

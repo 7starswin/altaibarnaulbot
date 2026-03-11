@@ -2,66 +2,112 @@ require("dotenv").config()
 
 const TelegramBot = require("node-telegram-bot-api")
 const User = require("./models/User")
-const banner = require("./services/banner")
 
-const bot = new TelegramBot(process.env.BOT_TOKEN,{polling:true})
+// create bot
+const bot = new TelegramBot(process.env.BOT_TOKEN, {
+  polling: true
+})
 
-bot.onText(/\/start (.+)/, async(msg,match)=>{
+console.log("Telegram bot started")
 
- const code = match[1]
+// START COMMAND
+bot.onText(/\/start (.+)/, async (msg, match) => {
 
- let ref = null
+  const chatId = msg.chat.id
+  const code = match[1]
 
- if(code.startsWith("agent_")){
-  ref = code.split("_")[1]
- }
+  let ref = null
 
- await User.findOneAndUpdate(
-  {telegramId:msg.from.id},
-  {
-   telegramId:msg.from.id,
-   username:msg.from.username,
-   referredBy:ref,
-   campaign:code
-  },
-  {upsert:true}
- )
+  if (code.startsWith("agent_")) {
+    ref = code.split("_")[1]
+  }
 
- const image = banner()
+  try {
 
- bot.sendPhoto(msg.chat.id,image,{
-  caption:"🔥 Welcome! Claim your promo bonus."
- })
+    await User.findOneAndUpdate(
+      { telegramId: msg.from.id },
+      {
+        telegramId: msg.from.id,
+        username: msg.from.username,
+        referredBy: ref,
+        campaign: code
+      },
+      { upsert: true }
+    )
+
+    bot.sendMessage(chatId,
+`🔥 Welcome!
+
+Your account is registered.
+
+Use commands:
+/promo - get promo banner
+/agent - get referral link`
+    )
+
+  } catch (err) {
+    console.log(err)
+  }
 
 })
 
-bot.onText(/\/start/, async(msg)=>{
 
- await User.findOneAndUpdate(
-  {telegramId:msg.from.id},
-  {
-   telegramId:msg.from.id,
-   username:msg.from.username
-  },
-  {upsert:true}
- )
+// NORMAL START
+bot.onText(/\/start/, async (msg) => {
 
- const image = banner()
+  const chatId = msg.chat.id
 
- bot.sendPhoto(msg.chat.id,image,{
-  caption:"🔥 Welcome to our platform!"
- })
+  try {
+
+    await User.findOneAndUpdate(
+      { telegramId: msg.from.id },
+      {
+        telegramId: msg.from.id,
+        username: msg.from.username
+      },
+      { upsert: true }
+    )
+
+    bot.sendMessage(chatId,
+`🔥 Welcome to our platform!
+
+Commands:
+/promo
+/agent`
+    )
+
+  } catch (err) {
+    console.log(err)
+  }
 
 })
 
-bot.onText(/\/agent/,async(msg)=>{
 
- const id = msg.from.id
+// PROMO COMMAND
+bot.onText(/\/promo/, (msg) => {
 
- const link = `https://t.me/YOURBOT?start=agent_${id}`
+  const chatId = msg.chat.id
 
- bot.sendMessage(msg.chat.id,
+  bot.sendMessage(chatId,
+`🎁 PROMO BONUS
 
+Claim your bonus now!
+
+https://example.com`
+  )
+
+})
+
+
+// AGENT LINK
+bot.onText(/\/agent/, (msg) => {
+
+  const chatId = msg.chat.id
+  const id = msg.from.id
+
+  const link = `https://t.me/YOURBOTNAME?start=agent_${id}`
+
+  bot.sendMessage(chatId,
 `🤝 Your Agent Link
 
 ${link}
@@ -70,14 +116,10 @@ Share this link and earn commission.`)
 
 })
 
-bot.onText(/\/promo/,async(msg)=>{
 
- const image = banner()
-
- bot.sendPhoto(msg.chat.id,image,{
-  caption:"🎁 Share this banner and invite players!"
- })
-
+// ERROR HANDLER
+bot.on("polling_error", (err) => {
+  console.log("Polling error:", err.message)
 })
 
 module.exports = bot

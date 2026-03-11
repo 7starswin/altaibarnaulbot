@@ -174,19 +174,25 @@ async function logToAdmin(bot, adminIds, message) {
   }
 }
 
+// ================= SAVE PROMO SUBMISSION (FIXED) =================
 async function saveSubmission(data) {
-  const entry = {
-    userId: data.userId,
-    username: sessions[data.userId]?.username || null,
-    promoCode: data.data.promoCode,
-    language: data.data.bannerLanguage,
-    filesDelivered: data.data.filesDelivered,
-    totalFiles: data.data.totalFiles,
-    failedFiles: data.data.failedFiles,
-    timestamp: Date.now()
+  try {
+    const entry = {
+      userId: data.userId,
+      username: data.username || (sessions[data.userId]?.username) || null,
+      promoCode: data.data.promoCode,
+      language: data.data.bannerLanguage,
+      filesDelivered: data.data.filesDelivered,
+      totalFiles: data.data.totalFiles,
+      failedFiles: data.data.failedFiles,
+      timestamp: Date.now()
+    };
+    promoActivities.push(entry);
+    savePromo();
+    console.log("✅ Promo activity saved:", entry);
+  } catch (err) {
+    console.error("❌ Error saving promo activity:", err);
   }
-  promoActivities.push(entry)
-  savePromo()
 }
 
 // ================= PROMO FLOW FUNCTIONS =================
@@ -562,9 +568,10 @@ async function deliverPromoMaterials(ctx, session, userId) {
     }
     try { await fs.rmdir(tempFolder) } catch {}
 
+    // Save promo submission with username
     await saveSubmission({
       userId,
-      type: 'affiliate_promo_banner',
+      username: ctx.from.username,
       data: {
         promoCode,
         bannerLanguage,
@@ -1125,18 +1132,26 @@ bot.hears("📢 Broadcast", (ctx) => {
 // ================= PROMO ACTIVITY (FIXED) =================
 bot.hears("📊 Promo Activity", (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
-  if (promoActivities.length === 0) {
-    ctx.reply("No promo activity yet.")
-    return
+  console.log("Admin requested promo activity")
+
+  try {
+    if (promoActivities.length === 0) {
+      return ctx.reply("No promo activity yet.")
+    }
+
+    let msg = "📊 **Promo Banner Requests**\n\n"
+    // Show last 10, newest first
+    const recent = [...promoActivities].reverse().slice(0, 10)
+    recent.forEach((p, i) => {
+      const user = p.username ? `@${p.username}` : `ID: ${p.userId}`
+      msg += `${i+1}. ${user} | Code: **${p.promoCode}** | Lang: ${p.language} | ${new Date(p.timestamp).toLocaleString()}\n`
+    })
+    ctx.reply(msg, { parse_mode: "Markdown" })
+    console.log("Promo activity displayed, count:", recent.length)
+  } catch (err) {
+    console.error("Error in promo activity handler:", err)
+    ctx.reply("An error occurred while fetching promo activity.")
   }
-  let msg = "📊 **Promo Banner Requests**\n\n"
-  // Show last 10 activities, newest first
-  const recent = [...promoActivities].reverse().slice(0, 10)
-  recent.forEach((p, i) => {
-    const user = p.username ? `@${p.username}` : `ID: ${p.userId}`
-    msg += `${i+1}. ${user} | Code: **${p.promoCode}** | Lang: ${p.language} | ${new Date(p.timestamp).toLocaleString()}\n`
-  })
-  ctx.reply(msg, { parse_mode: "Markdown" })
 })
 
 function showTicketList(ctx, category, page) {

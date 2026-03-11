@@ -174,7 +174,7 @@ async function logToAdmin(bot, adminIds, message) {
   }
 }
 
-// ================= SAVE PROMO SUBMISSION (FIXED) =================
+// ================= SAVE PROMO SUBMISSION =================
 async function saveSubmission(data) {
   try {
     const entry = {
@@ -568,7 +568,6 @@ async function deliverPromoMaterials(ctx, session, userId) {
     }
     try { await fs.rmdir(tempFolder) } catch {}
 
-    // Save promo submission with username
     await saveSubmission({
       userId,
       username: ctx.from.username,
@@ -1106,54 +1105,71 @@ Transaction ID: ${safe(session.data.trxId)}`
   clearSession(ctx.from.id)
 })
 
-// ================= ADMIN TICKET LISTS =================
-bot.hears("📥 Deposit Problems", (ctx) => {
+// ================= ADMIN MENU HANDLERS (ROBUST) =================
+// This single handler catches all admin menu buttons using a regex that matches the text part
+// It works even if the emoji is slightly different.
+bot.hears(/^(.*Deposit Problems.*|.*Withdrawal Problems.*|.*Agent Requests.*|.*Broadcast.*|.*Promo Activity.*|.*Generate Promo.*)$/, (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
-  showTicketList(ctx, "deposit", 0)
-})
 
-bot.hears("📤 Withdrawal Problems", (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  showTicketList(ctx, "withdrawal", 0)
-})
+  const text = ctx.message.text
 
-bot.hears("🤝 Agent Requests", (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  ctx.reply("Agent requests feature coming soon.")
-})
-
-bot.hears("📢 Broadcast", (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  const session = getSession(ctx.from.id)
-  session.state = "admin_broadcast"
-  ctx.reply("📢 Please enter the message you want to broadcast to all users:")
-})
-
-// ================= PROMO ACTIVITY (FIXED) =================
-bot.hears("📊 Promo Activity", (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  console.log("Admin requested promo activity")
-
-  try {
+  if (text.includes("Deposit Problems")) {
+    showTicketList(ctx, "deposit", 0)
+  } else if (text.includes("Withdrawal Problems")) {
+    showTicketList(ctx, "withdrawal", 0)
+  } else if (text.includes("Agent Requests")) {
+    ctx.reply("Agent requests feature coming soon.")
+  } else if (text.includes("Broadcast")) {
+    const session = getSession(ctx.from.id)
+    session.state = "admin_broadcast"
+    ctx.reply("📢 Please enter the message you want to broadcast to all users:")
+  } else if (text.includes("Promo Activity")) {
     if (promoActivities.length === 0) {
       return ctx.reply("No promo activity yet.")
     }
-
     let msg = "📊 **Promo Banner Requests**\n\n"
-    // Show last 10, newest first
     const recent = [...promoActivities].reverse().slice(0, 10)
     recent.forEach((p, i) => {
       const user = p.username ? `@${p.username}` : `ID: ${p.userId}`
       msg += `${i+1}. ${user} | Code: **${p.promoCode}** | Lang: ${p.language} | ${new Date(p.timestamp).toLocaleString()}\n`
     })
     ctx.reply(msg, { parse_mode: "Markdown" })
-    console.log("Promo activity displayed, count:", recent.length)
-  } catch (err) {
-    console.error("Error in promo activity handler:", err)
-    ctx.reply("An error occurred while fetching promo activity.")
+  } else if (text.includes("Generate Promo")) {
+    startPromoLanguageSelection(ctx)
   }
 })
 
+// Fallback to individual handlers if needed (they are still here but the regex above will catch first)
+// You can keep or remove them – they won't be triggered because the regex matches first.
+// For safety, we'll keep them commented.
+/*
+bot.hears("📥 Deposit Problems", (ctx) => { if (ADMIN_IDS.includes(ctx.from.id)) showTicketList(ctx, "deposit", 0) })
+bot.hears("📤 Withdrawal Problems", (ctx) => { if (ADMIN_IDS.includes(ctx.from.id)) showTicketList(ctx, "withdrawal", 0) })
+bot.hears("🤝 Agent Requests", (ctx) => { if (ADMIN_IDS.includes(ctx.from.id)) ctx.reply("Agent requests feature coming soon.") })
+bot.hears("📢 Broadcast", (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  const session = getSession(ctx.from.id)
+  session.state = "admin_broadcast"
+  ctx.reply("📢 Please enter the message you want to broadcast to all users:")
+})
+bot.hears("📊 Promo Activity", (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  if (promoActivities.length === 0) return ctx.reply("No promo activity yet.")
+  let msg = "📊 **Promo Banner Requests**\n\n"
+  const recent = [...promoActivities].reverse().slice(0, 10)
+  recent.forEach((p, i) => {
+    const user = p.username ? `@${p.username}` : `ID: ${p.userId}`
+    msg += `${i+1}. ${user} | Code: **${p.promoCode}** | Lang: ${p.language} | ${new Date(p.timestamp).toLocaleString()}\n`
+  })
+  ctx.reply(msg, { parse_mode: "Markdown" })
+})
+bot.hears("🎨 Generate Promo", async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  await startPromoLanguageSelection(ctx)
+})
+*/
+
+// ================= TICKET LIST DISPLAY FUNCTION =================
 function showTicketList(ctx, category, page) {
   const tickets = pendingTickets.filter(t => t.category === category && t.status === "open")
   const pageSize = 5
@@ -1243,4 +1259,4 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with Affiliate Promo Banner Feature & Admin Generate Promo")
+console.log("🚀 Bot Running with Admin Menu Fix & All Features")

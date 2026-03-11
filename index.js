@@ -3,7 +3,7 @@ const fs = require("fs").promises
 const fsSync = require("fs")
 const path = require("path")
 const { Telegraf, Markup } = require("telegraf")
-const sharp = require("sharp")          // Make sure this is installed
+const sharp = require("sharp")
 
 const bot = new Telegraf(process.env.BOT_TOKEN)
 
@@ -16,7 +16,6 @@ const TICKETS_FILE = "./tickets.json"
 const USERS_FILE = "./users.json"
 const PROMO_FILE = "./promo.json"
 
-// Load or initialize data
 let pendingTickets = []
 let allUsers = new Set()
 let promoActivities = []
@@ -48,7 +47,6 @@ try {
   console.error("Error loading promo activities:", err)
 }
 
-// Save functions
 function saveTickets() {
   fsSync.writeFileSync(TICKETS_FILE, JSON.stringify(pendingTickets, null, 2))
 }
@@ -89,12 +87,10 @@ function recordUser(userId) {
   }
 }
 
-// Helper to safely get value or "Not provided"
 function safe(val) {
   return val !== undefined && val !== null && val !== "" ? val : "Not provided"
 }
 
-// ================= UTILITY =================
 function generateTrackId() {
   return `TKT-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`
 }
@@ -193,6 +189,29 @@ async function saveSubmission(data) {
   savePromo()
 }
 
+// ================= PROMO FLOW FUNCTIONS =================
+async function startPromoLanguageSelection(ctx) {
+  const userId = ctx.from.id
+  const session = getSession(userId)
+  const texts = loadLanguage("en")
+
+  session.data.bannerFlow = "select_language"
+  await ctx.reply(
+    `🎨 **${texts.select_banner_language}**\n\n${texts.choose_banner_set}:`,
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback(`🇺🇸 ${texts.english}`, "promo_lang_en"),
+        Markup.button.callback(`🇧🇩 ${texts.bangla}`, "promo_lang_bn")
+      ],
+      [
+        Markup.button.callback(`🇮🇳 ${texts.hindi}`, "promo_lang_hi"),
+        Markup.button.callback(`🇵🇰 ${texts.pakistani}`, "promo_lang_pk")
+      ],
+      [Markup.button.callback(texts.back, "main_menu")]
+    ])
+  )
+}
+
 // ================= MENUS =================
 function userMenu() {
   return Markup.keyboard([
@@ -205,7 +224,7 @@ function adminMenu() {
   return Markup.keyboard([
     ["📥 Deposit Problems", "📤 Withdrawal Problems"],
     ["🤝 Agent Requests", "📢 Broadcast"],
-    ["📊 Promo Activity"],
+    ["📊 Promo Activity", "🎨 Generate Promo"],
     ["🔙 Main Menu"]
   ]).resize()
 }
@@ -307,29 +326,18 @@ bot.action(/manager_country_(.+)/, async (ctx) => {
   )
 })
 
-// ================= PROMO BANNER =================
+// ================= PROMO BANNER (AFFILIATE) =================
 bot.action("affiliate_promo_banner", async (ctx) => {
-  const userId = ctx.from.id
-  const session = getSession(userId)
-  const texts = loadLanguage("en")
-
-  session.data.bannerFlow = "select_language"
-  await ctx.editMessageText(
-    `🎨 **${texts.select_banner_language}**\n\n${texts.choose_banner_set}:`,
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback(`🇺🇸 ${texts.english}`, "promo_lang_en"),
-        Markup.button.callback(`🇧🇩 ${texts.bangla}`, "promo_lang_bn")
-      ],
-      [
-        Markup.button.callback(`🇮🇳 ${texts.hindi}`, "promo_lang_hi"),
-        Markup.button.callback(`🇵🇰 ${texts.pakistani}`, "promo_lang_pk")
-      ],
-      [Markup.button.callback(texts.back, "main_menu")]
-    ])
-  )
+  await startPromoLanguageSelection(ctx)
 })
 
+// ================= ADMIN GENERATE PROMO =================
+bot.hears("🎨 Generate Promo", async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  await startPromoLanguageSelection(ctx)
+})
+
+// ================= LANGUAGE SELECTION CALLBACK =================
 bot.action(/promo_lang_(.+)/, async (ctx) => {
   const lang = ctx.match[1]
   const userId = ctx.from.id
@@ -532,7 +540,6 @@ async function deliverPromoMaterials(ctx, session, userId) {
       }
     }
 
-    // Send in groups of up to 10
     const groupSize = 10
     for (let i = 0; i < processedImages.length; i += groupSize) {
       const group = processedImages.slice(i, i + groupSize)
@@ -550,13 +557,11 @@ async function deliverPromoMaterials(ctx, session, userId) {
       }
     }
 
-    // Cleanup temp files
     for (const imgPath of processedImages) {
       try { await fs.unlink(imgPath) } catch {}
     }
     try { await fs.rmdir(tempFolder) } catch {}
 
-    // Save submission
     await saveSubmission({
       userId,
       type: 'affiliate_promo_banner',
@@ -569,7 +574,6 @@ async function deliverPromoMaterials(ctx, session, userId) {
       }
     })
 
-    // Notify admins
     const adminMsg = `🎨 Promo Banner Request Complete\n\n` +
       `Name: ${userData.name}\n` +
       `User ID: ${userId}\n` +
@@ -580,13 +584,11 @@ async function deliverPromoMaterials(ctx, session, userId) {
       `Date: ${formatDate()}`
     await logToAdmin(bot, ADMIN_IDS, adminMsg)
 
-    // Success message to user
     const successMsg = failedCount > 0
       ? `✅ **Complete!**\n\n${sentCount} banners delivered with promo '${promoCode}' in ${bannerLanguage.toUpperCase()}. Failed: ${failedCount}`
       : `✅ **Complete!**\n\n${sentCount} banners delivered with your promo code '${promoCode}' in ${bannerLanguage.toUpperCase()}!`
     await ctx.reply(successMsg, { parse_mode: 'Markdown' })
 
-    // Final promo message with app download
     const finalMsg = texts.final_promo_message.replace(/{promo}/g, `<b>${promoCode}</b>`)
     await ctx.reply(finalMsg, {
       parse_mode: 'HTML',
@@ -612,7 +614,6 @@ bot.on(["photo", "video"], async (ctx) => {
   const userId = ctx.from.id
   recordUser(userId)
 
-  // USER REPLY TO ADMIN (file)
   if (!ADMIN_IDS.includes(userId) && !session.state) {
     const adminId = userLastAdmin[userId]
     if (adminId) {
@@ -645,7 +646,6 @@ bot.on(["photo", "video"], async (ctx) => {
     return
   }
 
-  // SUPPORT FLOW: file upload
   if (session.state !== "waiting_file") return
 
   if (ctx.message.photo) {
@@ -1122,17 +1122,21 @@ bot.hears("📢 Broadcast", (ctx) => {
   ctx.reply("📢 Please enter the message you want to broadcast to all users:")
 })
 
+// ================= PROMO ACTIVITY (FIXED) =================
 bot.hears("📊 Promo Activity", (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
   if (promoActivities.length === 0) {
     ctx.reply("No promo activity yet.")
     return
   }
-  let msg = "📊 Promo Banner Requests:\n\n"
-  promoActivities.slice(-10).reverse().forEach((p, i) => {
-    msg += `${i+1}. User ${p.username ? '@'+p.username : p.userId} | Code: ${p.promoCode} | Lang: ${p.language} | ${new Date(p.timestamp).toLocaleString()}\n`
+  let msg = "📊 **Promo Banner Requests**\n\n"
+  // Show last 10 activities, newest first
+  const recent = [...promoActivities].reverse().slice(0, 10)
+  recent.forEach((p, i) => {
+    const user = p.username ? `@${p.username}` : `ID: ${p.userId}`
+    msg += `${i+1}. ${user} | Code: **${p.promoCode}** | Lang: ${p.language} | ${new Date(p.timestamp).toLocaleString()}\n`
   })
-  ctx.reply(msg)
+  ctx.reply(msg, { parse_mode: "Markdown" })
 })
 
 function showTicketList(ctx, category, page) {
@@ -1224,4 +1228,4 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with Affiliate Promo Banner Feature")
+console.log("🚀 Bot Running with Affiliate Promo Banner Feature & Admin Generate Promo")

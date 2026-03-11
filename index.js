@@ -15,10 +15,12 @@ const ADMIN_IDS = process.env.ADMIN_IDS
 const TICKETS_FILE = "./tickets.json"
 const USERS_FILE = "./users.json"
 const PROMO_FILE = "./promo.json"
+const AGENT_FILE = "./agent.json"
 
 let pendingTickets = []
 let allUsers = new Set()
 let promoActivities = []
+let agentRequests = []   // store agent responses
 
 try {
   if (fsSync.existsSync(TICKETS_FILE)) {
@@ -47,6 +49,15 @@ try {
   console.error("Error loading promo activities:", err)
 }
 
+try {
+  if (fsSync.existsSync(AGENT_FILE)) {
+    const data = fsSync.readFileSync(AGENT_FILE, "utf8")
+    agentRequests = JSON.parse(data)
+  }
+} catch (err) {
+  console.error("Error loading agent requests:", err)
+}
+
 function saveTickets() {
   fsSync.writeFileSync(TICKETS_FILE, JSON.stringify(pendingTickets, null, 2))
 }
@@ -57,6 +68,10 @@ function saveUsers() {
 
 function savePromo() {
   fsSync.writeFileSync(PROMO_FILE, JSON.stringify(promoActivities, null, 2))
+}
+
+function saveAgentRequests() {
+  fsSync.writeFileSync(AGENT_FILE, JSON.stringify(agentRequests, null, 2))
 }
 
 // ================= SESSIONS =================
@@ -206,8 +221,20 @@ async function logToAdmin(bot, adminIds, message) {
 
 // ================= SAVE SUBMISSION (for agent responses) =================
 async function saveSubmission(data) {
-  // For agent responses, we just log to admin; but if you want to store them, you can extend.
-  console.log("Submission saved:", data);
+  // For agent responses, we store in agentRequests
+  if (data.type === 'agent_response') {
+    const entry = {
+      userId: data.userId,
+      username: data.username || null,
+      country: data.data.country,
+      response: data.data.response,
+      interested: data.data.interested,
+      timestamp: Date.now()
+    };
+    agentRequests.push(entry);
+    saveAgentRequests();
+    console.log("✅ Agent request saved:", entry);
+  }
 }
 
 // ================= PROMO FLOW FUNCTIONS =================
@@ -345,9 +372,10 @@ async function handleAgentResponse(ctx, country, response) {
   const isInterested = response === 'accept'
 
   try {
-    // Save agent response (optional)
+    // Save agent response
     await saveSubmission({
       userId,
+      username: ctx.from.username,
       type: 'agent_response',
       data: {
         country: countryName,
@@ -619,7 +647,18 @@ bot.hears(/^(.*Deposit Problems.*|.*Withdrawal Problems.*|.*Agent Requests.*|.*B
   } else if (text.includes("Withdrawal Problems")) {
     showTicketList(ctx, "withdrawal", 0)
   } else if (text.includes("Agent Requests")) {
-    ctx.reply("Agent requests feature coming soon.")
+    // Show agent requests list
+    if (agentRequests.length === 0) {
+      return ctx.reply("No agent requests yet.")
+    }
+    let msg = "🤝 **Agent Requests**\n\n"
+    const recent = [...agentRequests].reverse().slice(0, 10)
+    recent.forEach((req, i) => {
+      const user = req.username ? `@${req.username}` : `ID: ${req.userId}`
+      const status = req.interested ? "✅ Accepted" : "❌ Rejected"
+      msg += `${i+1}. ${user} | ${req.country} | ${status} | ${new Date(req.timestamp).toLocaleString()}\n`
+    })
+    ctx.reply(msg, { parse_mode: "Markdown" })
   } else if (text.includes("Broadcast")) {
     const session = getSession(ctx.from.id)
     session.state = "admin_broadcast"
@@ -1450,4 +1489,4 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with Agent Flow & All Features")
+console.log("🚀 Bot Running with Agent Requests Panel & All Features")

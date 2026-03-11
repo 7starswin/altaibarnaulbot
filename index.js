@@ -221,8 +221,8 @@ async function startPromoLanguageSelection(ctx) {
 // ================= MENUS =================
 function userMenu() {
   return Markup.keyboard([
-    ["👤 Player Support"],
-    ["💰 Affiliate Support", "🤝 Become Agent"]
+    ["Player Support"],
+    ["Affiliate Support", "Become Agent"]
   ]).resize()
 }
 
@@ -257,7 +257,7 @@ bot.hears("🔙 Main Menu", (ctx) => {
 })
 
 // ================= AFFILIATE SUPPORT =================
-bot.hears("💰 Affiliate Support", async (ctx) => {
+bot.hears("Affiliate Support", async (ctx) => {
   const userId = ctx.from.id
   recordUser(userId)
   clearSession(userId)
@@ -854,7 +854,7 @@ bot.action(/reply_(\d+)/, (ctx) => {
 })
 
 // ================= PLAYER SUPPORT =================
-bot.hears("👤 Player Support", (ctx) => {
+bot.hears("Player Support", (ctx) => {
   const userId = ctx.from.id
   recordUser(userId)
   clearSession(userId)
@@ -875,7 +875,7 @@ bot.hears("👤 Player Support", (ctx) => {
   )
 })
 
-bot.hears("🤝 Become Agent", (ctx) => {
+bot.hears("Become Agent", (ctx) => {
   ctx.reply("Agent registration coming soon.", userMenu())
 })
 
@@ -1139,36 +1139,6 @@ bot.hears(/^(.*Deposit Problems.*|.*Withdrawal Problems.*|.*Agent Requests.*|.*B
   }
 })
 
-// Fallback to individual handlers if needed (they are still here but the regex above will catch first)
-// You can keep or remove them – they won't be triggered because the regex matches first.
-// For safety, we'll keep them commented.
-/*
-bot.hears("📥 Deposit Problems", (ctx) => { if (ADMIN_IDS.includes(ctx.from.id)) showTicketList(ctx, "deposit", 0) })
-bot.hears("📤 Withdrawal Problems", (ctx) => { if (ADMIN_IDS.includes(ctx.from.id)) showTicketList(ctx, "withdrawal", 0) })
-bot.hears("🤝 Agent Requests", (ctx) => { if (ADMIN_IDS.includes(ctx.from.id)) ctx.reply("Agent requests feature coming soon.") })
-bot.hears("📢 Broadcast", (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  const session = getSession(ctx.from.id)
-  session.state = "admin_broadcast"
-  ctx.reply("📢 Please enter the message you want to broadcast to all users:")
-})
-bot.hears("📊 Promo Activity", (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  if (promoActivities.length === 0) return ctx.reply("No promo activity yet.")
-  let msg = "📊 **Promo Banner Requests**\n\n"
-  const recent = [...promoActivities].reverse().slice(0, 10)
-  recent.forEach((p, i) => {
-    const user = p.username ? `@${p.username}` : `ID: ${p.userId}`
-    msg += `${i+1}. ${user} | Code: **${p.promoCode}** | Lang: ${p.language} | ${new Date(p.timestamp).toLocaleString()}\n`
-  })
-  ctx.reply(msg, { parse_mode: "Markdown" })
-})
-bot.hears("🎨 Generate Promo", async (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  await startPromoLanguageSelection(ctx)
-})
-*/
-
 // ================= TICKET LIST DISPLAY FUNCTION =================
 function showTicketList(ctx, category, page) {
   const tickets = pendingTickets.filter(t => t.category === category && t.status === "open")
@@ -1259,4 +1229,4 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with Admin Menu Fix & All Features")
+console.log("🚀 Bot Running with User Menu Fixed & All Features")

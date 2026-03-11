@@ -224,12 +224,34 @@ bot.on("text",(ctx)=>{
 
  const session = getSession(ctx.from.id)
 
+ // Existing user flow: waiting for player ID
  if(session.state==="waiting_player_id"){
+   session.data.playerId = ctx.message.text
+   showDatePicker(ctx,session)
+   return
+ }
 
- session.data.playerId = ctx.message.text
+ // ========== NEW: Admin reply functionality ==========
+ const userId = ctx.from.id
+ if (ADMIN_IDS.includes(userId) && session.state === "admin_reply") {
+   const targetUserId = session.data.targetUserId
+   if (!targetUserId) {
+     ctx.reply("❌ Error: No user to reply to. Please click 'Reply' again.")
+     clearSession(userId)
+     return
+   }
 
- showDatePicker(ctx,session)
+   // Send the admin's message to the original user
+   bot.telegram.sendMessage(targetUserId, 
+     `✉️ Admin reply:\n\n${ctx.message.text}`
+   ).then(() => {
+     ctx.reply("✅ Your reply has been sent to the user.")
+   }).catch(() => {
+     ctx.reply("❌ Failed to send message. The user might have blocked the bot.")
+   })
 
+   // Clear admin's reply state
+   clearSession(userId)
  }
 
 })
@@ -418,6 +440,24 @@ bot.action(/resolve_(.+)/,(ctx)=>{
 
  ctx.editMessageReplyMarkup({inline_keyboard:[]})
 
+})
+
+// ========== NEW: Admin reply handler ==========
+bot.action(/reply_(\d+)/, (ctx) => {
+  const adminId = ctx.from.id
+
+  // Ensure only admins can use this
+  if (!ADMIN_IDS.includes(adminId)) {
+    return ctx.answerCbQuery("You are not authorized")
+  }
+
+  const targetUserId = parseInt(ctx.match[1])
+  const session = getSession(adminId)
+  session.state = "admin_reply"
+  session.data.targetUserId = targetUserId
+
+  ctx.answerCbQuery()
+  ctx.reply("✏️ Please type your reply message below. It will be sent to the user.")
 })
 
 // ================= START BOT =================

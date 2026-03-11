@@ -5,103 +5,87 @@ const mongoose = require("mongoose")
 
 const bot = new Telegraf(process.env.BOT_TOKEN)
 
+const ADMIN_ID = Number(process.env.ADMIN_ID)
 
-// =======================
-// MongoDB
-// =======================
+// ================= DATABASE =================
 
-mongoose.connect(process.env.MONGO_URI)
-.then(()=>console.log("✅ MongoDB connected"))
+mongoose.connect(process.env.MONGO_URI,{
+useNewUrlParser:true,
+useUnifiedTopology:true
+})
+.then(()=>console.log("✅ MongoDB Connected"))
 .catch(err=>console.log(err))
 
-
-// =======================
-// Models
-// =======================
+// ================= MODELS =================
 
 const User = mongoose.model("User",{
-
 telegramId:Number,
 name:String,
 phone:String,
-createdAt:{
-type:Date,
-default:Date.now
-}
-
+createdAt:{type:Date,default:Date.now}
 })
 
 const Ticket = mongoose.model("Ticket",{
-
-userId:Number,
 ticketId:Number,
+userId:Number,
 message:String,
-status:{
-type:String,
-default:"open"
-}
-
+status:{type:String,default:"open"},
+createdAt:{type:Date,default:Date.now}
 })
 
+const Agent = mongoose.model("Agent",{
+userId:Number,
+name:String,
+status:{type:String,default:"pending"}
+})
 
-// =======================
-// Admin
-// =======================
+const Deposit = mongoose.model("Deposit",{
+userId:Number,
+amount:String,
+status:{type:String,default:"pending"}
+})
 
-const ADMIN_ID = process.env.ADMIN_ID
+const Withdraw = mongoose.model("Withdraw",{
+userId:Number,
+amount:String,
+status:{type:String,default:"pending"}
+})
 
+// ================= TEMP STATES =================
 
-// =======================
-// Menu
-// =======================
+let supportMode = {}
+let depositMode = {}
+let withdrawMode = {}
+let promoMode = {}
+
+// ================= MENU =================
 
 function mainMenu(ctx){
 
 return ctx.reply(
-
-"🔥 Welcome to the system",
-
-Markup.inlineKeyboard([
-
-[
-Markup.button.callback("👤 Player Support","support")
-],
-
-[
-Markup.button.callback("🎟 Promo Code Banner","promo")
-],
-
-[
-Markup.button.callback("🧑‍💼 Become Agent","agent")
-]
-
-])
-
+"🔥 Main Menu",
+Markup.keyboard([
+["👤 Support","🎟 Promo Banner"],
+["💰 Deposit","💸 Withdraw"],
+["🤝 Become Agent"]
+]).resize()
 )
 
 }
 
-
-// =======================
-// Start
-// =======================
+// ================= START =================
 
 bot.start(async(ctx)=>{
 
-const id = ctx.from.id
-
-let user = await User.findOne({telegramId:id})
+let user = await User.findOne({telegramId:ctx.from.id})
 
 if(!user){
 
 return ctx.reply(
-
-"📱 Please share phone number",
-
+"📱 Please share your phone number to register",
 Markup.keyboard([
-[Markup.button.contactRequest("Share Phone Number")]
+[Markup.button.contactRequest("📲 Share Phone Number")]
 ]).resize()
-
 )
 
 }
@@ -110,22 +94,23 @@ mainMenu(ctx)
 
 })
 
-
-// =======================
-// Register
-// =======================
+// ================= REGISTER =================
 
 bot.on("contact",async(ctx)=>{
 
-const id = ctx.from.id
+let phone = ctx.message.contact.phone_number
+
+let exist = await User.findOne({telegramId:ctx.from.id})
+
+if(!exist){
 
 await User.create({
-
-telegramId:id,
+telegramId:ctx.from.id,
 name:ctx.from.first_name,
-phone:ctx.message.contact.phone_number
-
+phone
 })
+
+}
 
 ctx.reply("✅ Registration successful")
 
@@ -133,93 +118,263 @@ mainMenu(ctx)
 
 })
 
+// ================= SUPPORT =================
 
-// =======================
-// Support
-// =======================
+bot.hears("👤 Support",async(ctx)=>{
 
-bot.action("support",async(ctx)=>{
+let ticketId = Math.floor(100000 + Math.random()*900000)
 
-const ticketId = Math.floor(1000+Math.random()*9000)
+supportMode[ctx.from.id] = ticketId
 
 await Ticket.create({
-
-userId:ctx.from.id,
-ticketId
-
+ticketId,
+userId:ctx.from.id
 })
 
 ctx.reply(`🎫 Ticket Created\n\nTicket ID: #${ticketId}\n\nSend your problem message.`)
 
 })
 
+// ================= PROMO =================
 
-// =======================
-// Promo
-// =======================
+bot.hears("🎟 Promo Banner",(ctx)=>{
 
-bot.action("promo",(ctx)=>{
+promoMode[ctx.from.id] = true
 
 ctx.reply("🎟 Send your promo code")
 
 })
 
+// ================= DEPOSIT =================
 
-// =======================
-// Agent
-// =======================
+bot.hears("💰 Deposit",(ctx)=>{
 
-bot.action("agent",(ctx)=>{
+depositMode[ctx.from.id] = true
 
-ctx.reply("🧑‍💼 Agent request sent to admin")
+ctx.reply("💰 Enter deposit amount")
+
+})
+
+// ================= WITHDRAW =================
+
+bot.hears("💸 Withdraw",(ctx)=>{
+
+withdrawMode[ctx.from.id] = true
+
+ctx.reply("💸 Enter withdraw amount")
+
+})
+
+// ================= AGENT =================
+
+bot.hears("🤝 Become Agent",async(ctx)=>{
+
+await Agent.create({
+userId:ctx.from.id,
+name:ctx.from.first_name
+})
+
+ctx.reply("✅ Agent request sent to admin")
 
 bot.telegram.sendMessage(
-
 ADMIN_ID,
-
-`🤝 New Agent Request\nUser: ${ctx.from.first_name}\nID: ${ctx.from.id}`
-
+`🤝 New Agent Request\n\nUser: ${ctx.from.first_name}\nID: ${ctx.from.id}`
 )
 
 })
 
-
-// =======================
-// Broadcast
-// =======================
-
-bot.command("broadcast",async(ctx)=>{
-
-if(ctx.from.id != ADMIN_ID) return
-
-ctx.reply("Send broadcast message")
-
-})
+// ================= TEXT HANDLER =================
 
 bot.on("text",async(ctx)=>{
 
-if(ctx.from.id != ADMIN_ID) return
+let id = ctx.from.id
+let text = ctx.message.text
 
-const users = await User.find()
+// SUPPORT MESSAGE
 
-for(let u of users){
+if(supportMode[id]){
 
-bot.telegram.sendMessage(u.telegramId,ctx.message.text)
+let ticketId = supportMode[id]
+
+await Ticket.updateOne(
+{ticketId},
+{$set:{message:text}}
+)
+
+bot.telegram.sendMessage(
+ADMIN_ID,
+`🎫 Support Ticket\n\nTicket: #${ticketId}\nUser: ${ctx.from.first_name}\nID: ${id}\n\nMessage:\n${text}`
+)
+
+delete supportMode[id]
+
+return ctx.reply("✅ Support request sent")
 
 }
 
-ctx.reply("✅ Broadcast sent")
+// PROMO
+
+if(promoMode[id]){
+
+delete promoMode[id]
+
+return ctx.reply(
+`🔥 PROMO BANNER 🔥
+
+Use Code: ${text}
+
+Join Now and Win Big!
+
+🎮 Best Casino Platform`
+)
+
+}
+
+// DEPOSIT
+
+if(depositMode[id]){
+
+await Deposit.create({
+userId:id,
+amount:text
+})
+
+bot.telegram.sendMessage(
+ADMIN_ID,
+`💰 Deposit Request
+
+User: ${ctx.from.first_name}
+ID: ${id}
+
+Amount: ${text}`
+)
+
+delete depositMode[id]
+
+return ctx.reply("✅ Deposit request sent")
+
+}
+
+// WITHDRAW
+
+if(withdrawMode[id]){
+
+await Withdraw.create({
+userId:id,
+amount:text
+})
+
+bot.telegram.sendMessage(
+ADMIN_ID,
+`💸 Withdraw Request
+
+User: ${ctx.from.first_name}
+ID: ${id}
+
+Amount: ${text}`
+)
+
+delete withdrawMode[id]
+
+return ctx.reply("✅ Withdraw request sent")
+
+}
 
 })
 
+// ================= ADMIN COMMANDS =================
 
-// =======================
-// Launch
-// =======================
+// BROADCAST
+
+bot.command("broadcast",async(ctx)=>{
+
+if(ctx.from.id !== ADMIN_ID) return
+
+ctx.reply("Send message for broadcast")
+
+promoMode["broadcast"] = true
+
+})
+
+bot.on("message",async(ctx)=>{
+
+if(ctx.from.id !== ADMIN_ID) return
+
+if(promoMode["broadcast"]){
+
+let users = await User.find()
+
+let sent = 0
+
+for(let u of users){
+
+try{
+await bot.telegram.sendMessage(u.telegramId,ctx.message.text)
+sent++
+}catch{}
+
+}
+
+promoMode["broadcast"] = false
+
+ctx.reply(`✅ Broadcast sent to ${sent} users`)
+
+}
+
+})
+
+// STATS
+
+bot.command("stats",async(ctx)=>{
+
+if(ctx.from.id !== ADMIN_ID) return
+
+let users = await User.countDocuments()
+let tickets = await Ticket.countDocuments({status:"open"})
+let agents = await Agent.countDocuments()
+
+ctx.reply(
+`📊 Bot Statistics
+
+👥 Users: ${users}
+🎫 Tickets: ${tickets}
+🤝 Agent Requests: ${agents}`
+)
+
+})
+
+// REPLY TICKET
+
+bot.command("reply",async(ctx)=>{
+
+if(ctx.from.id !== ADMIN_ID) return
+
+let args = ctx.message.text.split(" ")
+
+let ticketId = args[1]
+
+let replyText = args.slice(2).join(" ")
+
+let ticket = await Ticket.findOne({ticketId})
+
+if(!ticket) return ctx.reply("Ticket not found")
+
+bot.telegram.sendMessage(
+ticket.userId,
+`📩 Admin Reply (Ticket #${ticketId})
+
+${replyText}`
+)
+
+ctx.reply("✅ Reply sent")
+
+})
+
+// ================= START BOT =================
 
 bot.launch()
 
-console.log("🚀 Bot started")
+console.log("🚀 Bot Running")
 
 process.once("SIGINT",()=>bot.stop("SIGINT"))
 process.once("SIGTERM",()=>bot.stop("SIGTERM"))

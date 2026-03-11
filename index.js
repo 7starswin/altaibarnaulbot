@@ -3,378 +3,421 @@ require("dotenv").config()
 const { Telegraf, Markup } = require("telegraf")
 const mongoose = require("mongoose")
 
-const bot = new Telegraf(process.env.BOT_TOKEN)
+// ================= BOT =================
 
-const ADMIN_ID = Number(process.env.ADMIN_ID)
+const bot = new Telegraf(process.env.BOT_TOKEN)
+const ADMIN_IDS = process.env.ADMIN_IDS.split(",").map(Number)
 
 // ================= DATABASE =================
 
-mongoose.connect(process.env.MONGO_URI,{
-useNewUrlParser:true,
-useUnifiedTopology:true
-})
+mongoose.connect(process.env.MONGO_URI)
 .then(()=>console.log("✅ MongoDB Connected"))
-.catch(err=>console.log(err))
-
-// ================= MODELS =================
+.catch(()=>console.log("Mongo Error"))
 
 const User = mongoose.model("User",{
 telegramId:Number,
 name:String,
 phone:String,
-createdAt:{type:Date,default:Date.now}
+joined:{type:Date,default:Date.now}
 })
 
 const Ticket = mongoose.model("Ticket",{
 ticketId:Number,
 userId:Number,
-message:String,
-status:{type:String,default:"open"},
-createdAt:{type:Date,default:Date.now}
+messages:[String],
+status:{type:String,default:"open"}
 })
 
 const Agent = mongoose.model("Agent",{
 userId:Number,
-name:String,
+country:String,
+username:String,
 status:{type:String,default:"pending"}
 })
 
-const Deposit = mongoose.model("Deposit",{
+const Finance = mongoose.model("Finance",{
 userId:Number,
-amount:String,
+type:String,
+amount:Number,
 status:{type:String,default:"pending"}
 })
 
-const Withdraw = mongoose.model("Withdraw",{
-userId:Number,
-amount:String,
-status:{type:String,default:"pending"}
+const Promo = mongoose.model("Promo",{
+code:String,
+createdBy:Number,
+createdAt:{type:Date,default:Date.now}
 })
 
-// ================= TEMP STATES =================
+// ================= SESSION =================
 
-let supportMode = {}
-let depositMode = {}
-let withdrawMode = {}
-let promoMode = {}
+const sessions = {}
 
-// ================= MENU =================
+function session(id){
+if(!sessions[id]){
+sessions[id]={step:null,data:{}}
+}
+return sessions[id]
+}
 
-function mainMenu(ctx){
+function clearSession(id){
+delete sessions[id]
+}
 
-return ctx.reply(
-"🔥 Main Menu",
-Markup.keyboard([
-["👤 Support","🎟 Promo Banner"],
-["💰 Deposit","💸 Withdraw"],
-["🤝 Become Agent"]
+// ================= ADMIN CHECK =================
+
+function isAdmin(id){
+return ADMIN_IDS.includes(id)
+}
+
+// ================= MAIN MENU =================
+
+function mainMenu(){
+
+return Markup.keyboard([
+["👤 Player Support","🎟 Promo Code"],
+["🤝 Become Agent"],
+["💰 Deposit","💸 Withdraw"]
 ]).resize()
-)
+
+}
+
+// ================= ADMIN MENU =================
+
+function adminMenu(){
+
+return Markup.keyboard([
+["📊 Dashboard"],
+["📢 Broadcast"],
+["🎫 Tickets"],
+["🤝 Agent Requests"],
+["💰 Deposits","💸 Withdraws"]
+]).resize()
 
 }
 
 // ================= START =================
 
-bot.start(async(ctx)=>{
+bot.start(async ctx=>{
 
 let user = await User.findOne({telegramId:ctx.from.id})
 
 if(!user){
 
-return ctx.reply(
-"📱 Please share your phone number to register",
+ctx.reply(
+"📱 Share your phone to register",
 Markup.keyboard([
-[Markup.button.contactRequest("📲 Share Phone Number")]
+Markup.button.contactRequest("📲 Share Phone")
 ]).resize()
 )
 
+const s=session(ctx.from.id)
+s.step="register_phone"
+return
+
 }
 
-mainMenu(ctx)
+ctx.reply("🏠 Welcome",mainMenu())
 
 })
 
 // ================= REGISTER =================
 
-bot.on("contact",async(ctx)=>{
+bot.on("contact",async ctx=>{
 
-let phone = ctx.message.contact.phone_number
+const s=session(ctx.from.id)
 
-let exist = await User.findOne({telegramId:ctx.from.id})
-
-if(!exist){
+if(s.step!=="register_phone") return
 
 await User.create({
 telegramId:ctx.from.id,
 name:ctx.from.first_name,
-phone
+phone:ctx.message.contact.phone_number
 })
 
-}
+ctx.reply("✅ Registration completed",mainMenu())
 
-ctx.reply("✅ Registration successful")
-
-mainMenu(ctx)
+clearSession(ctx.from.id)
 
 })
 
-// ================= SUPPORT =================
+// ================= PLAYER SUPPORT =================
 
-bot.hears("👤 Support",async(ctx)=>{
+bot.hears("👤 Player Support",ctx=>{
 
-let ticketId = Math.floor(100000 + Math.random()*900000)
+const s=session(ctx.from.id)
+s.step="ticket_message"
 
-supportMode[ctx.from.id] = ticketId
-
-await Ticket.create({
-ticketId,
-userId:ctx.from.id
-})
-
-ctx.reply(`🎫 Ticket Created\n\nTicket ID: #${ticketId}\n\nSend your problem message.`)
+ctx.reply("Send your problem message")
 
 })
+
 
 // ================= PROMO =================
 
-bot.hears("🎟 Promo Banner",(ctx)=>{
+bot.hears("🎟 Promo Code",ctx=>{
 
-promoMode[ctx.from.id] = true
+const s=session(ctx.from.id)
+s.step="promo_code"
 
-ctx.reply("🎟 Send your promo code")
-
-})
-
-// ================= DEPOSIT =================
-
-bot.hears("💰 Deposit",(ctx)=>{
-
-depositMode[ctx.from.id] = true
-
-ctx.reply("💰 Enter deposit amount")
+ctx.reply("Send promo code (max 10 characters)")
 
 })
 
-// ================= WITHDRAW =================
-
-bot.hears("💸 Withdraw",(ctx)=>{
-
-withdrawMode[ctx.from.id] = true
-
-ctx.reply("💸 Enter withdraw amount")
-
-})
 
 // ================= AGENT =================
 
-bot.hears("🤝 Become Agent",async(ctx)=>{
+bot.hears("🤝 Become Agent",ctx=>{
 
-await Agent.create({
-userId:ctx.from.id,
-name:ctx.from.first_name
-})
+const s=session(ctx.from.id)
+s.step="agent_country"
 
-ctx.reply("✅ Agent request sent to admin")
-
-bot.telegram.sendMessage(
-ADMIN_ID,
-`🤝 New Agent Request\n\nUser: ${ctx.from.first_name}\nID: ${ctx.from.id}`
-)
+ctx.reply("Send your country")
 
 })
+
+
+// ================= DEPOSIT =================
+
+bot.hears("💰 Deposit",ctx=>{
+
+const s=session(ctx.from.id)
+s.step="deposit_amount"
+
+ctx.reply("Enter deposit amount")
+
+})
+
+
+// ================= WITHDRAW =================
+
+bot.hears("💸 Withdraw",ctx=>{
+
+const s=session(ctx.from.id)
+s.step="withdraw_amount"
+
+ctx.reply("Enter withdraw amount")
+
+})
+
 
 // ================= TEXT HANDLER =================
 
-bot.on("text",async(ctx)=>{
+bot.on("text",async ctx=>{
 
-let id = ctx.from.id
-let text = ctx.message.text
+const text=ctx.message.text
+const s=session(ctx.from.id)
 
-// SUPPORT MESSAGE
+// ---------- PLAYER TICKET ----------
 
-if(supportMode[id]){
+if(s.step==="ticket_message"){
 
-let ticketId = supportMode[id]
+const ticketId=Math.floor(100000+Math.random()*900000)
 
-await Ticket.updateOne(
-{ticketId},
-{$set:{message:text}}
-)
+await Ticket.create({
+ticketId,
+userId:ctx.from.id,
+messages:[text]
+})
 
+ADMIN_IDS.forEach(admin=>{
 bot.telegram.sendMessage(
-ADMIN_ID,
-`🎫 Support Ticket\n\nTicket: #${ticketId}\nUser: ${ctx.from.first_name}\nID: ${id}\n\nMessage:\n${text}`
+admin,
+`🎫 New Ticket
+
+ID: ${ticketId}
+User: ${ctx.from.id}
+
+${text}`
 )
+})
 
-delete supportMode[id]
+ctx.reply(`✅ Ticket created\nTicket ID: ${ticketId}`)
 
-return ctx.reply("✅ Support request sent")
+clearSession(ctx.from.id)
 
 }
 
-// PROMO
+// ---------- PROMO ----------
 
-if(promoMode[id]){
+if(s.step==="promo_code"){
 
-delete promoMode[id]
+if(text.length>10){
+ctx.reply("Promo code too long")
+return
+}
 
-return ctx.reply(
+await Promo.create({
+code:text,
+createdBy:ctx.from.id
+})
+
+ctx.reply(
 `🔥 PROMO BANNER 🔥
 
-Use Code: ${text}
+🎁 CODE: ${text}
 
-Join Now and Win Big!
-
-🎮 Best Casino Platform`
+💰 Claim bonus now
+🎮 Start playing today`
 )
+
+clearSession(ctx.from.id)
 
 }
 
-// DEPOSIT
+// ---------- AGENT ----------
 
-if(depositMode[id]){
+if(s.step==="agent_country"){
 
-await Deposit.create({
-userId:id,
+await Agent.create({
+userId:ctx.from.id,
+country:text,
+username:ctx.from.username
+})
+
+ADMIN_IDS.forEach(admin=>{
+bot.telegram.sendMessage(
+admin,
+`🤝 Agent Request
+
+User: ${ctx.from.id}
+Country: ${text}
+Username: @${ctx.from.username}`
+)
+})
+
+ctx.reply("✅ Agent request sent")
+
+clearSession(ctx.from.id)
+
+}
+
+// ---------- DEPOSIT ----------
+
+if(s.step==="deposit_amount"){
+
+await Finance.create({
+userId:ctx.from.id,
+type:"deposit",
 amount:text
 })
 
+ADMIN_IDS.forEach(admin=>{
 bot.telegram.sendMessage(
-ADMIN_ID,
+admin,
 `💰 Deposit Request
 
-User: ${ctx.from.first_name}
-ID: ${id}
-
+User: ${ctx.from.id}
 Amount: ${text}`
 )
+})
 
-delete depositMode[id]
+ctx.reply("Deposit request sent")
 
-return ctx.reply("✅ Deposit request sent")
+clearSession(ctx.from.id)
 
 }
 
-// WITHDRAW
+// ---------- WITHDRAW ----------
 
-if(withdrawMode[id]){
+if(s.step==="withdraw_amount"){
 
-await Withdraw.create({
-userId:id,
+await Finance.create({
+userId:ctx.from.id,
+type:"withdraw",
 amount:text
 })
 
+ADMIN_IDS.forEach(admin=>{
 bot.telegram.sendMessage(
-ADMIN_ID,
+admin,
 `💸 Withdraw Request
 
-User: ${ctx.from.first_name}
-ID: ${id}
-
+User: ${ctx.from.id}
 Amount: ${text}`
 )
+})
 
-delete withdrawMode[id]
+ctx.reply("Withdraw request sent")
 
-return ctx.reply("✅ Withdraw request sent")
+clearSession(ctx.from.id)
 
 }
 
 })
 
-// ================= ADMIN COMMANDS =================
+// ================= ADMIN COMMAND =================
 
-// BROADCAST
+bot.command("admin",async ctx=>{
 
-bot.command("broadcast",async(ctx)=>{
+if(!isAdmin(ctx.from.id)) return
 
-if(ctx.from.id !== ADMIN_ID) return
-
-ctx.reply("Send message for broadcast")
-
-promoMode["broadcast"] = true
+ctx.reply("Admin Panel",adminMenu())
 
 })
 
-bot.on("message",async(ctx)=>{
+// ================= DASHBOARD =================
 
-if(ctx.from.id !== ADMIN_ID) return
+bot.hears("📊 Dashboard",async ctx=>{
 
-if(promoMode["broadcast"]){
+if(!isAdmin(ctx.from.id)) return
 
-let users = await User.find()
+const users=await User.countDocuments()
+const tickets=await Ticket.countDocuments()
+const agents=await Agent.countDocuments()
 
-let sent = 0
+ctx.reply(
+`📊 Stats
 
-for(let u of users){
+Users: ${users}
+Tickets: ${tickets}
+Agents: ${agents}`
+)
+
+})
+
+// ================= BROADCAST =================
+
+bot.hears("📢 Broadcast",ctx=>{
+
+if(!isAdmin(ctx.from.id)) return
+
+const s=session(ctx.from.id)
+s.step="broadcast"
+
+ctx.reply("Send broadcast message")
+
+})
+
+bot.on("text",async ctx=>{
+
+const s=session(ctx.from.id)
+
+if(s.step==="broadcast"){
+
+const users=await User.find()
+
+for(const u of users){
 
 try{
 await bot.telegram.sendMessage(u.telegramId,ctx.message.text)
-sent++
-}catch{}
+}catch(e){}
 
 }
 
-promoMode["broadcast"] = false
+ctx.reply("Broadcast sent")
 
-ctx.reply(`✅ Broadcast sent to ${sent} users`)
+clearSession(ctx.from.id)
 
 }
 
 })
 
-// STATS
+// ================= ERROR HANDLER =================
 
-bot.command("stats",async(ctx)=>{
+bot.catch(err=>console.log(err))
 
-if(ctx.from.id !== ADMIN_ID) return
-
-let users = await User.countDocuments()
-let tickets = await Ticket.countDocuments({status:"open"})
-let agents = await Agent.countDocuments()
-
-ctx.reply(
-`📊 Bot Statistics
-
-👥 Users: ${users}
-🎫 Tickets: ${tickets}
-🤝 Agent Requests: ${agents}`
-)
-
-})
-
-// REPLY TICKET
-
-bot.command("reply",async(ctx)=>{
-
-if(ctx.from.id !== ADMIN_ID) return
-
-let args = ctx.message.text.split(" ")
-
-let ticketId = args[1]
-
-let replyText = args.slice(2).join(" ")
-
-let ticket = await Ticket.findOne({ticketId})
-
-if(!ticket) return ctx.reply("Ticket not found")
-
-bot.telegram.sendMessage(
-ticket.userId,
-`📩 Admin Reply (Ticket #${ticketId})
-
-${replyText}`
-)
-
-ctx.reply("✅ Reply sent")
-
-})
-
-// ================= START BOT =================
+// ================= START =================
 
 bot.launch()
 
 console.log("🚀 Bot Running")
-
-process.once("SIGINT",()=>bot.stop("SIGINT"))
-process.once("SIGTERM",()=>bot.stop("SIGTERM"))

@@ -1,6 +1,7 @@
 {
   "name": "telegram-marketing-bot",
   "version": "1.0.0",
+  "description": "Telegram bot with player support, admin panel, and promo banner generator",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -8,6 +9,13 @@
   "dependencies": {
     "dotenv": "^16.4.0",
     "mongoose": "^8.3.0",
-    "telegraf": "^4.16.3"
-  }
+    "telegraf": "^4.16.3",
+    "sharp": "^0.33.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": ["telegram", "bot", "support", "affiliate", "promo"],
+  "author": "",
+  "license": "ISC"
 }

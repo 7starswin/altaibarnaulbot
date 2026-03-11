@@ -78,6 +78,47 @@ bot.hears("🔙 Main Menu", (ctx) => {
   }
 })
 
+// ================= ADMIN CATEGORY MENUS =================
+bot.hears("📥 Deposit Problems", (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  const deposits = pendingTickets.filter(t => t.category === "deposit" && t.status === "open")
+  if (deposits.length === 0) {
+    ctx.reply("No open deposit tickets.")
+  } else {
+    let msg = "📥 Open Deposit Tickets:\n\n"
+    deposits.forEach(t => {
+      msg += `🔹 ${t.trackId} - User ${t.userId} (${new Date(t.timestamp).toLocaleString()})\n`
+    })
+    ctx.reply(msg)
+  }
+})
+
+bot.hears("📤 Withdrawal Problems", (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  const withdrawals = pendingTickets.filter(t => t.category === "withdrawal" && t.status === "open")
+  if (withdrawals.length === 0) {
+    ctx.reply("No open withdrawal tickets.")
+  } else {
+    let msg = "📤 Open Withdrawal Tickets:\n\n"
+    withdrawals.forEach(t => {
+      msg += `🔹 ${t.trackId} - User ${t.userId} (${new Date(t.timestamp).toLocaleString()})\n`
+    })
+    ctx.reply(msg)
+  }
+})
+
+bot.hears("🤝 Agent Requests", (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  ctx.reply("Agent requests feature coming soon.")
+})
+
+bot.hears("📢 Broadcast", (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  const session = getSession(ctx.from.id)
+  session.state = "admin_broadcast"
+  ctx.reply("📢 Please enter the message you want to broadcast to all users:")
+})
+
 // ================= PLAYER SUPPORT =================
 bot.hears("👤 Player Support", (ctx) => {
   const userId = ctx.from.id
@@ -99,6 +140,18 @@ bot.hears("👤 Player Support", (ctx) => {
     ])
   )
 })
+
+// ================= AFFILIATE / AGENT PLACEHOLDERS =================
+bot.hears("💰 Affiliate Support", (ctx) => {
+  ctx.reply("Affiliate support coming soon.", userMenu())
+})
+
+bot.hears("🤝 Become Agent", (ctx) => {
+  ctx.reply("Agent registration coming soon.", userMenu())
+})
+
+// ================= CALLBACK QUERIES =================
+// (all action handlers go here)
 
 // ================= COUNTRY SELECTION =================
 bot.action(/player_select_(.+)/, (ctx) => {
@@ -198,11 +251,169 @@ bot.action(/pay_(.+)/, (ctx) => {
   ctx.reply("Enter User ID (numbers only):")
 })
 
-// ================= DETAILS COLLECTION (TEXT) =================
+// ================= CALENDAR ACTIONS =================
+bot.action(/date_(\d+)/, (ctx) => {
+  const day = ctx.match[1]
+  const session = getSession(ctx.from.id)
+  const year = session.calendar.year
+  const month = session.calendar.month
+  const selectedDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  session.data.selectedDate = selectedDate
+  session.state = "waiting_time"
+  ctx.editMessageText(`Selected date: ${selectedDate}\n\nPlease enter time in any format:`)
+})
+
+bot.action("prev_month", (ctx) => {
+  const session = getSession(ctx.from.id)
+  let { year, month } = session.calendar
+  if (month === 0) {
+    month = 11
+    year -= 1
+  } else {
+    month -= 1
+  }
+  session.calendar = { year, month }
+  showCalendar(ctx, session)
+})
+
+bot.action("next_month", (ctx) => {
+  const session = getSession(ctx.from.id)
+  let { year, month } = session.calendar
+  if (month === 11) {
+    month = 0
+    year += 1
+  } else {
+    month += 1
+  }
+  session.calendar = { year, month }
+  showCalendar(ctx, session)
+})
+
+bot.action("ignore", (ctx) => ctx.answerCbQuery())
+
+// ================= RESTART / MAIN MENU ACTIONS =================
+bot.action("restart_player", (ctx) => {
+  const userId = ctx.from.id
+  clearSession(userId)
+  const session = getSession(userId)
+  session.state = "player_country_selection"
+  session.data.type = "player"
+  ctx.editMessageText(
+    "👤 Player Support\n\nWhere are you from?",
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback("🇧🇩 Bangladesh", "player_select_bangladesh"),
+        Markup.button.callback("🇮🇳 India", "player_select_india")
+      ],
+      [Markup.button.callback("« Back", "main_menu")]
+    ])
+  )
+})
+
+bot.action("main_menu", (ctx) => {
+  const userId = ctx.from.id
+  clearSession(userId)
+  ctx.deleteMessage().catch(() => {})
+  if (ADMIN_IDS.includes(userId)) {
+    ctx.reply("Admin menu:", adminMenu())
+  } else {
+    ctx.reply("Main menu:", userMenu())
+  }
+})
+
+// ================= ADMIN ACTIONS (resolve & reply) =================
+bot.action(/resolve_(.+)_(\d+)/, async (ctx) => {
+  const trackId = ctx.match[1]
+  const userId = parseInt(ctx.match[2])
+  const adminId = ctx.from.id
+
+  // Mark ticket as resolved in pendingTickets
+  const ticket = pendingTickets.find(t => t.trackId === trackId)
+  if (ticket) ticket.status = "resolved"
+
+  ctx.answerCbQuery("Ticket marked resolved")
+  ctx.editMessageReplyMarkup({ inline_keyboard: [] })
+
+  await bot.telegram.sendMessage(
+    userId,
+    `✅ Your request ${trackId} has been resolved.\n\nPlease rate your experience:`,
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback("1⭐ Best", `rate_${trackId}_${adminId}_1`),
+        Markup.button.callback("2⭐ Good", `rate_${trackId}_${adminId}_2`),
+        Markup.button.callback("3⭐ Poor", `rate_${trackId}_${adminId}_3`),
+      ]
+    ])
+  )
+})
+
+bot.action(/rate_(.+)_(\d+)_(\d)/, async (ctx) => {
+  const trackId = ctx.match[1]
+  const adminId = parseInt(ctx.match[2])
+  const rating = ctx.match[3]
+  const userId = ctx.from.id
+
+  let ratingText = ""
+  if (rating === "1") ratingText = "1⭐ Best"
+  else if (rating === "2") ratingText = "2⭐ Good"
+  else if (rating === "3") ratingText = "3⭐ Poor"
+
+  await bot.telegram.sendMessage(
+    adminId,
+    `📊 User @${ctx.from.username || ctx.from.first_name} (ID: ${userId}) rated request ${trackId} as: ${ratingText}`
+  )
+
+  ctx.editMessageText("Thank you for your feedback! 🙏")
+  ctx.answerCbQuery()
+})
+
+bot.action(/reply_(\d+)/, (ctx) => {
+  const adminId = ctx.from.id
+  if (!ADMIN_IDS.includes(adminId)) {
+    return ctx.answerCbQuery("You are not authorized")
+  }
+
+  const targetUserId = parseInt(ctx.match[1])
+  const session = getSession(adminId)
+  session.state = "admin_reply"
+  session.data.targetUserId = targetUserId
+
+  ctx.answerCbQuery()
+  ctx.reply("✏️ Please type your reply message below. It will be sent to the user.")
+})
+
+// ================= TEXT HANDLER =================
+// This single handler processes all text messages (including user replies, admin replies, form filling, broadcast)
 bot.on("text", (ctx) => {
   const session = getSession(ctx.from.id)
   const userId = ctx.from.id
   recordUser(userId)
+
+  // --- ADMIN BROADCAST STATE ---
+  if (ADMIN_IDS.includes(userId) && session.state === "admin_broadcast") {
+    const message = ctx.message.text
+    let successCount = 0
+    let failCount = 0
+
+    ctx.reply(`Broadcasting to ${allUsers.size} users...`)
+
+    // Use Promise.all to track completion
+    const promises = []
+    allUsers.forEach((uid) => {
+      promises.push(
+        bot.telegram.sendMessage(uid, `📢 Broadcast from admin:\n\n${message}`)
+          .then(() => successCount++)
+          .catch(() => failCount++)
+      )
+    })
+
+    Promise.all(promises).then(() => {
+      ctx.reply(`✅ Broadcast finished.\nSent: ${successCount}\nFailed: ${failCount}`)
+    })
+
+    clearSession(userId)
+    return
+  }
 
   // --- USER REPLY TO ADMIN (outside ticket flow) ---
   if (!ADMIN_IDS.includes(userId) && !session.state) {
@@ -278,91 +489,7 @@ bot.on("text", (ctx) => {
   }
 })
 
-// ================= CALENDAR =================
-function showCalendar(ctx, session) {
-  let year = session.calendar.year
-  let month = session.calendar.month
-
-  const monthNames = ["January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December"]
-
-  const firstDay = new Date(year, month, 1).getDay()
-  const daysInMonth = new Date(year, month + 1, 0).getDate()
-
-  let buttons = []
-  let row = []
-
-  for (let i = 0; i < firstDay; i++) {
-    row.push(Markup.button.callback(" ", "ignore"))
-  }
-
-  for (let d = 1; d <= daysInMonth; d++) {
-    row.push(Markup.button.callback(d.toString(), `date_${d}`))
-    if (row.length === 7) {
-      buttons.push(row)
-      row = []
-    }
-  }
-  if (row.length > 0) {
-    while (row.length < 7) {
-      row.push(Markup.button.callback(" ", "ignore"))
-    }
-    buttons.push(row)
-  }
-
-  buttons.push([
-    Markup.button.callback("◀ Prev", "prev_month"),
-    Markup.button.callback(`${monthNames[month]} ${year}`, "ignore"),
-    Markup.button.callback("Next ▶", "next_month")
-  ])
-  buttons.push([Markup.button.callback("Main Menu", "main_menu")])
-
-  ctx.reply(
-    `📅 Select Date\nCurrent Month: ${monthNames[month]} ${year}`,
-    Markup.inlineKeyboard(buttons)
-  )
-}
-
-bot.action(/date_(\d+)/, (ctx) => {
-  const day = ctx.match[1]
-  const session = getSession(ctx.from.id)
-  const year = session.calendar.year
-  const month = session.calendar.month
-  const selectedDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-  session.data.selectedDate = selectedDate
-  session.state = "waiting_time"
-  ctx.editMessageText(`Selected date: ${selectedDate}\n\nPlease enter time in any format:`)
-})
-
-bot.action("prev_month", (ctx) => {
-  const session = getSession(ctx.from.id)
-  let { year, month } = session.calendar
-  if (month === 0) {
-    month = 11
-    year -= 1
-  } else {
-    month -= 1
-  }
-  session.calendar = { year, month }
-  showCalendar(ctx, session)
-})
-
-bot.action("next_month", (ctx) => {
-  const session = getSession(ctx.from.id)
-  let { year, month } = session.calendar
-  if (month === 11) {
-    month = 0
-    year += 1
-  } else {
-    month += 1
-  }
-  session.calendar = { year, month }
-  showCalendar(ctx, session)
-})
-
-bot.action("ignore", (ctx) => ctx.answerCbQuery())
-
-// ================= FILE UPLOAD =================
+// ================= FILE HANDLER (photos/videos) =================
 bot.on(["photo", "video"], (ctx) => {
   const session = getSession(ctx.from.id)
   const userId = ctx.from.id
@@ -418,6 +545,51 @@ bot.on(["photo", "video"], (ctx) => {
   showConfirmation(ctx, session)
 })
 
+// ================= CALENDAR DISPLAY FUNCTION =================
+function showCalendar(ctx, session) {
+  let year = session.calendar.year
+  let month = session.calendar.month
+
+  const monthNames = ["January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"]
+
+  const firstDay = new Date(year, month, 1).getDay()
+  const daysInMonth = new Date(year, month + 1, 0).getDate()
+
+  let buttons = []
+  let row = []
+
+  for (let i = 0; i < firstDay; i++) {
+    row.push(Markup.button.callback(" ", "ignore"))
+  }
+
+  for (let d = 1; d <= daysInMonth; d++) {
+    row.push(Markup.button.callback(d.toString(), `date_${d}`))
+    if (row.length === 7) {
+      buttons.push(row)
+      row = []
+    }
+  }
+  if (row.length > 0) {
+    while (row.length < 7) {
+      row.push(Markup.button.callback(" ", "ignore"))
+    }
+    buttons.push(row)
+  }
+
+  buttons.push([
+    Markup.button.callback("◀ Prev", "prev_month"),
+    Markup.button.callback(`${monthNames[month]} ${year}`, "ignore"),
+    Markup.button.callback("Next ▶", "next_month")
+  ])
+  buttons.push([Markup.button.callback("Main Menu", "main_menu")])
+
+  ctx.reply(
+    `📅 Select Date\nCurrent Month: ${monthNames[month]} ${year}`,
+    Markup.inlineKeyboard(buttons)
+  )
+}
+
 // ================= CONFIRMATION =================
 async function showConfirmation(ctx, session) {
   session.state = "confirm"
@@ -467,8 +639,8 @@ bot.action("submit_player", async (ctx) => {
   const ticket = {
     trackId,
     userId,
-    type: session.data.issueType, // "Deposit" or "Withdrawal"
-    category: session.data.category, // "deposit" or "withdrawal"
+    type: session.data.issueType,
+    category: session.data.category,
     data: { ...session.data },
     status: "open",
     timestamp: Date.now()
@@ -533,177 +705,6 @@ Transaction ID: ${session.data.trxId}`
   )
 
   clearSession(ctx.from.id)
-})
-
-// ================= RESTART / MAIN MENU =================
-bot.action("restart_player", (ctx) => {
-  const userId = ctx.from.id
-  clearSession(userId)
-  const session = getSession(userId)
-  session.state = "player_country_selection"
-  session.data.type = "player"
-  ctx.editMessageText(
-    "👤 Player Support\n\nWhere are you from?",
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback("🇧🇩 Bangladesh", "player_select_bangladesh"),
-        Markup.button.callback("🇮🇳 India", "player_select_india")
-      ],
-      [Markup.button.callback("« Back", "main_menu")]
-    ])
-  )
-})
-
-bot.action("main_menu", (ctx) => {
-  const userId = ctx.from.id
-  clearSession(userId)
-  ctx.deleteMessage().catch(() => {})
-  if (ADMIN_IDS.includes(userId)) {
-    ctx.reply("Admin menu:", adminMenu())
-  } else {
-    ctx.reply("Main menu:", userMenu())
-  }
-})
-
-// ================= ADMIN ACTIONS (resolve & reply) =================
-bot.action(/resolve_(.+)_(\d+)/, async (ctx) => {
-  const trackId = ctx.match[1]
-  const userId = parseInt(ctx.match[2])
-  const adminId = ctx.from.id
-
-  // Mark ticket as resolved in pendingTickets
-  const ticket = pendingTickets.find(t => t.trackId === trackId)
-  if (ticket) ticket.status = "resolved"
-
-  ctx.answerCbQuery("Ticket marked resolved")
-  ctx.editMessageReplyMarkup({ inline_keyboard: [] })
-
-  await bot.telegram.sendMessage(
-    userId,
-    `✅ Your request ${trackId} has been resolved.\n\nPlease rate your experience:`,
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback("10⭐ Best", `rate_${trackId}_${adminId}_10`),
-        Markup.button.callback("7⭐ Good", `rate_${trackId}_${adminId}_7`),
-        Markup.button.callback("3⭐ Poor", `rate_${trackId}_${adminId}_3`),
-      ]
-    ])
-  )
-})
-
-bot.action(/rate_(.+)_(\d+)_(\d)/, async (ctx) => {
-  const trackId = ctx.match[1]
-  const adminId = parseInt(ctx.match[2])
-  const rating = ctx.match[3]
-  const userId = ctx.from.id
-
-  let ratingText = ""
-  if (rating === "10") ratingText = "10⭐ Best"
-  else if (rating === "7") ratingText = "7⭐ Good"
-  else if (rating === "3") ratingText = "3⭐ Poor"
-
-  await bot.telegram.sendMessage(
-    adminId,
-    `📊 User @${ctx.from.username || ctx.from.first_name} (ID: ${userId}) rated request ${trackId} as: ${ratingText}`
-  )
-
-  ctx.editMessageText("Thank you for your feedback! 🙏")
-  ctx.answerCbQuery()
-})
-
-bot.action(/reply_(\d+)/, (ctx) => {
-  const adminId = ctx.from.id
-  if (!ADMIN_IDS.includes(adminId)) {
-    return ctx.answerCbQuery("You are not authorized")
-  }
-
-  const targetUserId = parseInt(ctx.match[1])
-  const session = getSession(adminId)
-  session.state = "admin_reply"
-  session.data.targetUserId = targetUserId
-
-  ctx.answerCbQuery()
-  ctx.reply("✏️ Please type your reply message below. It will be sent to the user.")
-})
-
-// ================= ADMIN CATEGORY MENUS =================
-bot.hears("📥 Deposit Problems", (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  const deposits = pendingTickets.filter(t => t.category === "deposit" && t.status === "open")
-  if (deposits.length === 0) {
-    ctx.reply("No open deposit tickets.")
-  } else {
-    let msg = "📥 Open Deposit Tickets:\n\n"
-    deposits.forEach(t => {
-      msg += `🔹 ${t.trackId} - User ${t.userId} (${new Date(t.timestamp).toLocaleString()})\n`
-    })
-    ctx.reply(msg)
-  }
-})
-
-bot.hears("📤 Withdrawal Problems", (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  const withdrawals = pendingTickets.filter(t => t.category === "withdrawal" && t.status === "open")
-  if (withdrawals.length === 0) {
-    ctx.reply("No open withdrawal tickets.")
-  } else {
-    let msg = "📤 Open Withdrawal Tickets:\n\n"
-    withdrawals.forEach(t => {
-      msg += `🔹 ${t.trackId} - User ${t.userId} (${new Date(t.timestamp).toLocaleString()})\n`
-    })
-    ctx.reply(msg)
-  }
-})
-
-bot.hears("🤝 Agent Requests", (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  ctx.reply("Agent requests feature coming soon.")
-})
-
-bot.hears("📢 Broadcast", (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  const session = getSession(ctx.from.id)
-  session.state = "admin_broadcast"
-  ctx.reply("📢 Please enter the message you want to broadcast to all users:")
-})
-
-// Broadcast handling
-bot.on("text", (ctx) => {
-  const session = getSession(ctx.from.id)
-  const userId = ctx.from.id
-
-  // ... (previous text handling above) ...
-
-  // Broadcast state for admin
-  if (ADMIN_IDS.includes(userId) && session.state === "admin_broadcast") {
-    const message = ctx.message.text
-    let successCount = 0
-    let failCount = 0
-
-    ctx.reply(`Broadcasting to ${allUsers.size} users...`)
-
-    allUsers.forEach(async (uid) => {
-      try {
-        await bot.telegram.sendMessage(uid, `📢 Broadcast from admin:\n\n${message}`)
-        successCount++
-      } catch {
-        failCount++
-      }
-    })
-
-    ctx.reply(`✅ Broadcast finished.\nSent: ${successCount}\nFailed: ${failCount}`)
-    clearSession(userId)
-    return
-  }
-})
-
-// ================= AFFILIATE / AGENT PLACEHOLDERS =================
-bot.hears("💰 Affiliate Support", (ctx) => {
-  ctx.reply("Affiliate support coming soon.", userMenu())
-})
-
-bot.hears("🤝 Become Agent", (ctx) => {
-  ctx.reply("Agent registration coming soon.", userMenu())
 })
 
 // ================= START BOT =================

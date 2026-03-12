@@ -1961,6 +1961,11 @@ bot.on("text", async (ctx) => {
     const session = getSession(ctx.from.id)
     const userId = ctx.from.id
 
+    // === NEW: Log current session state for debugging ===
+    if (ADMIN_IDS.includes(userId)) {
+      console.log("   Admin session state:", session.state)
+    }
+
     // ADMIN BROADCAST MESSAGE
     if (ADMIN_IDS.includes(userId) && session.state === "admin_broadcast_message") {
       const message = ctx.message.text

@@ -1147,14 +1147,14 @@ async function deliverPromoMaterials(ctx, session, userId) {
           <svg width="${width}" height="${height}">
             <text 
               x="50%" 
-              y="84%" 
+              y="85%" 
               text-anchor="middle" 
-              font-family="Azo Sans Uber, 'Azo Super', Impact, sans-serif"
+              font-family="Azo Sans Uber, 'Arial Black', Impact, sans-serif"
               font-size="${fontSize}" 
-              font-weight="0"
+              font-weight="900"
               fill="#ff00a2" 
               stroke="black"
-              stroke-width="4"
+              stroke-width="3"
               paint-order="stroke"
               letter-spacing="2px"
               text-transform="uppercase"

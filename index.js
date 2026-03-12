@@ -43,7 +43,7 @@ const ADMIN_IDS = process.env.ADMIN_IDS
   ? process.env.ADMIN_IDS.split(",").map(id => parseInt(id.trim()))
   : []
 
-// ================= PERSISTENT STORAGE (JSON for non-user data) =================
+// ================= PERSISTENT STORAGE (JSON) =================
 const TICKETS_FILE = "./tickets.json"
 const PROMO_FILE = "./promo.json"
 const AGENT_FILE = "./agent.json"

@@ -394,6 +394,9 @@ bot.action(/promo_cat_(.+)/, async (ctx) => {
     session.data.promoCategory = category
     session.state = "waiting_promo_code"
 
+    // === ADDED LOG ===
+    console.log("   State set to waiting_promo_code for user", userId)
+
     await ctx.editMessageText(
       `✏️ **${texts.type_your_promo}**\n\n${texts.enter_promo_code_message}`,
       { parse_mode: "Markdown" }
@@ -1954,7 +1957,7 @@ Transaction ID: ${safe(session.data.trxId)}`
   }
 })
 
-// ================= TEXT HANDLER =================
+// ================= TEXT HANDLER (UPDATED WITH STATE LOG) =================
 bot.on("text", async (ctx) => {
   console.log("📝 text received from", ctx.from.id, ":", ctx.message.text)
   try {

@@ -27,6 +27,7 @@ if (MONGODB_URI) {
       console.log("Continuing without MongoDB...")
     })
 
+    // Schema matches your existing user data
     const userSchema = new mongoose.Schema({
       userId: { type: Number, required: true, unique: true },
       username: String,
@@ -711,6 +712,7 @@ bot.start(async (ctx) => {
 
     const phone = await getPhone(userId)
     if (phone) {
+      // Existing user – update info and show menu
       await updateUser(userId, {
         username: ctx.from.username,
         firstName: ctx.from.first_name,
@@ -719,6 +721,7 @@ bot.start(async (ctx) => {
       return ctx.reply("Welcome back to Support Bot!", userMenu())
     }
 
+    // New user – ask for phone
     await ctx.reply(
       "Please share your phone number to continue:",
       Markup.keyboard([
@@ -1139,10 +1142,9 @@ async function deliverPromoMaterials(ctx, session, userId) {
 
         const image = sharp(inputPath)
         const { width, height } = await image.metadata()
-        // Adjust font size as needed
         const fontSize = Math.max(54, Math.min(width * 0.091, 115))
 
-        // ===== IMPORTANT: Adjust x and y to match your banner's promo box =====
+        // ===== ADJUST x AND y TO MATCH YOUR BANNER'S PROMO BOX =====
         const textSvg = `
           <svg width="${width}" height="${height}">
             <text 
@@ -1154,7 +1156,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
               font-weight="900"
               fill="#ff00a2" 
               stroke="black"
-              stroke-width="3"
+              stroke-width="4"
               paint-order="stroke"
               letter-spacing="2px"
               text-transform="uppercase"
@@ -2054,4 +2056,4 @@ process.on('uncaughtException', (error) => {
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with 6 Languages, 4 Categories & Custom Text Style")
+console.log("🚀 Bot Running with All Features & Existing MongoDB Data Integrated")

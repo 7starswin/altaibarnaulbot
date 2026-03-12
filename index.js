@@ -1112,20 +1112,25 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
   }
 })
 
-// ================= DELIVER PROMO MATERIALS (FIXED WITH FALLBACK) =================
+// ================= DELIVER PROMO MATERIALS (DIAGNOSTIC) =================
 async function deliverPromoMaterials(ctx, session, userId) {
+  console.log("🚀 deliverPromoMaterials started for user", userId)
   try {
     const { bannerLanguage, promoCategory, promoCode } = session.data
     const texts = loadLanguage("en")
     const userData = { name: ctx.from.first_name }
 
+    console.log("📦 Input data:", { bannerLanguage, promoCategory, promoCode })
+
     if (!promoCode || promoCode.length > 10) {
+      console.log("⚠️ Invalid promo code")
       await ctx.reply(`⚠️ ${texts.invalid_promo_code}`)
       return
     }
 
     const validLangs = ['en', 'bn', 'hi', 'tr', 'th', 'eg']
     if (!validLangs.includes(bannerLanguage)) {
+      console.log("⚠️ Invalid language")
       await ctx.reply(`⚠️ ${texts.language_not_available}`)
       return
     }
@@ -1137,6 +1142,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
     } else {
       const validCats = ['cricket', 'football', 'matchday', 'video']
       if (!validCats.includes(promoCategory)) {
+        console.log("⚠️ Invalid category")
         await ctx.reply(`⚠️ ${texts.category_not_available}`)
         return
       }
@@ -1150,15 +1156,21 @@ async function deliverPromoMaterials(ctx, session, userId) {
     for (const cat of categories) {
       const folderPath = path.join(__dirname, 'assets', bannerLanguage, cat, 'banners')
       console.log(`📁 Checking folder: ${folderPath}`)
-      await ensureFolder(folderPath) // ensure it exists (creates if not)
+      // Check if folder exists
+      try {
+        await fs.access(folderPath)
+      } catch (e) {
+        console.log(`❌ Folder does not exist: ${folderPath}`)
+        continue
+      }
       const files = await getImageFiles(folderPath)
       console.log(`   Found ${files.length} files in ${cat}:`, files)
-      // Prepend category name to avoid filename collisions when processing
       const withCat = files.map(f => ({ cat, file: f }))
       allImageFiles = allImageFiles.concat(withCat)
     }
 
     if (allImageFiles.length === 0) {
+      console.log("⚠️ No banner files found")
       await ctx.reply(`⚠️ No banners found for ${bannerLanguage}/${promoCategory}. Please check your assets.`)
       return
     }
@@ -1167,6 +1179,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
 
     const tempFolder = path.join(__dirname, 'temp', userId.toString())
     await ensureFolder(tempFolder)
+    console.log("📁 Temp folder:", tempFolder)
 
     let sentCount = 0
     let failedCount = 0
@@ -1176,10 +1189,10 @@ async function deliverPromoMaterials(ctx, session, userId) {
     const concurrencyLimit = 5
     for (let i = 0; i < allImageFiles.length; i += concurrencyLimit) {
       const chunk = allImageFiles.slice(i, i + concurrencyLimit)
+      console.log(`🔄 Processing chunk ${i / concurrencyLimit + 1} with ${chunk.length} images`)
       const promises = chunk.map(async ({ cat, file }) => {
         try {
           const inputPath = path.join(__dirname, 'assets', bannerLanguage, cat, 'banners', file)
-          // Use category in output filename to avoid overwrites
           const outputPath = path.join(tempFolder, `${cat}_${promoCode}_${file}`)
 
           const image = sharp(inputPath)
@@ -1230,10 +1243,13 @@ async function deliverPromoMaterials(ctx, session, userId) {
     }
 
     if (processedImages.length === 0) {
+      console.log("❌ No banners could be generated")
       await ctx.reply("❌ No banners could be generated. Please try again later.")
       clearSession(userId)
       return
     }
+
+    console.log(`✅ Generated ${processedImages.length} images, sending...`)
 
     // Send images – try media group first, fallback to individual sends
     const groupSize = 10
@@ -1252,13 +1268,13 @@ async function deliverPromoMaterials(ctx, session, userId) {
         for (const imgPath of group) {
           try {
             await ctx.replyWithPhoto({ source: imgPath })
-            await delay(500) // small delay to avoid rate limits
+            await delay(500)
           } catch (singleErr) {
             console.error('Failed to send single image:', singleErr)
           }
         }
       }
-      await delay(1000) // delay between groups
+      await delay(1000)
     }
 
     // Cleanup temp files
@@ -1312,6 +1328,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
     })
 
     clearSession(userId)
+    console.log("✅ Promo delivery completed successfully")
 
   } catch (error) {
     console.error('❌ Promo delivery error:', error)
@@ -1971,6 +1988,7 @@ bot.on("text", async (ctx) => {
 
     // PROMO CODE WAITING
     if (session.state === "waiting_promo_code") {
+      console.log("📝 Promo code received:", ctx.message.text)
       const promoCode = ctx.message.text.trim()
       if (promoCode.length > 10) {
         ctx.reply("⚠️ Promo code must be max 10 characters. Please try again.")

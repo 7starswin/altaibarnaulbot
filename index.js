@@ -156,8 +156,10 @@ async function getUserData(userId) {
   if (isMongoConnected && User) {
     return await User.findOne({ userId })
   }
-  // If no MongoDB, try to read from a JSON file (optional)
-  // For simplicity, we return null and rely on sessions for phone
+  // If no MongoDB, try to read from session (phone stored in session)
+  if (sessions[userId] && sessions[userId].phone) {
+    return { phone: sessions[userId].phone }
+  }
   return null
 }
 
@@ -186,7 +188,7 @@ async function recordUser(ctx, phone = null) {
       console.error("Error saving user to MongoDB:", err)
     }
   } else {
-    // If no MongoDB, store phone in session for this run
+    // If no MongoDB, store phone in session
     if (phone) {
       if (!sessions[userId]) sessions[userId] = {}
       sessions[userId].phone = phone
@@ -194,38 +196,35 @@ async function recordUser(ctx, phone = null) {
   }
 }
 
-// ================= CHECK PHONE BEFORE PROCEEDING =================
-async function ensurePhone(ctx, next) {
+// ================= CHECK PHONE BEFORE PROCEEDING (skip for admins) =================
+async function ensurePhone(ctx) {
   const userId = ctx.from.id
+  // Admins are exempt
+  if (ADMIN_IDS.includes(userId)) return true
+
   const userData = await getUserData(userId)
   let hasPhone = false
 
-  if (isMongoConnected && userData && userData.phone) {
-    hasPhone = true
-  } else if (!isMongoConnected && sessions[userId] && sessions[userId].phone) {
+  if (userData && userData.phone) {
     hasPhone = true
   }
 
   if (!hasPhone) {
-    // Ask for phone and stop further handlers
     await ctx.reply(
       "Please share your phone number to continue:",
       Markup.keyboard([
         [Markup.button.contactRequest("📱 Share Contact")]
       ]).resize().oneTime()
     )
-    return false // indicates phone not provided
+    return false
   }
-  return true // phone exists
+  return true
 }
 
-// Middleware to attach to every handler that needs phone check
-// We'll manually call ensurePhone at the start of each hears/action
-
 // ================= HELPER: safe username display =================
-function displayUser(user) {
-  if (user.username) return `@${user.username}`
-  return `ID: ${user.id} (no username)`
+function displayUser(ctx) {
+  if (ctx.from.username) return `@${ctx.from.username}`
+  return `ID: ${ctx.from.id} (no username)`
 }
 
 // ================= UTILITY =================
@@ -608,12 +607,15 @@ function adminMenu() {
 bot.start(async (ctx) => {
   try {
     const userId = ctx.from.id
+    // If admin, skip phone check and go straight to admin menu
+    if (ADMIN_IDS.includes(userId)) {
+      return ctx.reply("Welcome Admin! Use the menu below to manage tickets.", adminMenu())
+    }
+
+    // For normal users, check if phone exists
     const userData = await getUserData(userId)
     let hasPhone = false
-
-    if (isMongoConnected && userData && userData.phone) {
-      hasPhone = true
-    } else if (!isMongoConnected && sessions[userId] && sessions[userId].phone) {
+    if (userData && userData.phone) {
       hasPhone = true
     }
 
@@ -627,11 +629,7 @@ bot.start(async (ctx) => {
     }
 
     await recordUser(ctx)
-    if (ADMIN_IDS.includes(userId)) {
-      ctx.reply("Welcome Admin! Use the menu below to manage tickets.", adminMenu())
-    } else {
-      ctx.reply("Welcome to Support Bot", userMenu())
-    }
+    ctx.reply("Welcome to Support Bot", userMenu())
   } catch (err) {
     console.error("Error in start handler:", err)
   }
@@ -656,40 +654,16 @@ bot.on("contact", async (ctx) => {
   }
 })
 
-// ================= MIDDLEWARE FOR PHONE CHECK =================
-// We'll use a wrapper function for hears and actions that require phone
-async function withPhone(ctx, next) {
-  const userId = ctx.from.id
-  const userData = await getUserData(userId)
-  let hasPhone = false
-
-  if (isMongoConnected && userData && userData.phone) {
-    hasPhone = true
-  } else if (!isMongoConnected && sessions[userId] && sessions[userId].phone) {
-    hasPhone = true
-  }
-
-  if (!hasPhone) {
-    await ctx.reply(
-      "Please share your phone number first:",
-      Markup.keyboard([
-        [Markup.button.contactRequest("📱 Share Contact")]
-      ]).resize().oneTime()
-    )
-    return false
-  }
-  return true
-}
-
 // ================= MAIN MENU HANDLER =================
 bot.hears("🔙 Main Menu", async (ctx) => {
-  if (!(await withPhone(ctx))) return
   try {
+    // For admins, skip phone check
     if (ADMIN_IDS.includes(ctx.from.id)) {
-      ctx.reply("Admin menu:", adminMenu())
-    } else {
-      ctx.reply("Main menu:", userMenu())
+      return ctx.reply("Admin menu:", adminMenu())
     }
+    // For users, ensure phone exists
+    if (!(await ensurePhone(ctx))) return
+    ctx.reply("Main menu:", userMenu())
   } catch (err) {
     console.error("Error in main menu handler:", err)
   }
@@ -697,7 +671,7 @@ bot.hears("🔙 Main Menu", async (ctx) => {
 
 // ================= USER MENU HANDLERS =================
 bot.hears("Player Support", async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     await recordUser(ctx)
     const userId = ctx.from.id
@@ -723,7 +697,7 @@ bot.hears("Player Support", async (ctx) => {
 })
 
 bot.hears("Affiliate Support", async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     await recordUser(ctx)
     const userId = ctx.from.id
@@ -751,7 +725,7 @@ bot.hears("Affiliate Support", async (ctx) => {
 })
 
 bot.hears("Become Agent", async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     await recordUser(ctx)
     const userId = ctx.from.id
@@ -764,7 +738,7 @@ bot.hears("Become Agent", async (ctx) => {
 
 // ================= AFFILIATE MANAGER =================
 bot.action("affiliate_manager", async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     const userId = ctx.from.id
     const session = getSession(userId)
@@ -792,7 +766,7 @@ bot.action("affiliate_manager", async (ctx) => {
 })
 
 bot.action(/manager_country_(.+)/, async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     const country = ctx.match[1]
     const userId = ctx.from.id
@@ -830,7 +804,7 @@ bot.action(/manager_country_(.+)/, async (ctx) => {
 
 // ================= AGENT FLOW CALLBACKS =================
 bot.action(/agent_country_(.+)/, async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     const country = ctx.match[1]
     await showAgentDetails(ctx, country)
@@ -842,7 +816,7 @@ bot.action(/agent_country_(.+)/, async (ctx) => {
 })
 
 bot.action(/agent_next_(.+)/, async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     const country = ctx.match[1]
     await showAgentConfirmation(ctx, country)
@@ -854,7 +828,7 @@ bot.action(/agent_next_(.+)/, async (ctx) => {
 })
 
 bot.action(/agent_(accept|reject)_(.+)/, async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     const response = ctx.match[1]
     const country = ctx.match[2]
@@ -868,7 +842,7 @@ bot.action(/agent_(accept|reject)_(.+)/, async (ctx) => {
 
 // ================= PROMO BANNER (AFFILIATE) =================
 bot.action("affiliate_promo_banner", async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     await startPromoLanguageSelection(ctx)
     await ctx.answerCbQuery().catch(() => {})
@@ -881,7 +855,7 @@ bot.action("affiliate_promo_banner", async (ctx) => {
 // ================= ADMIN GENERATE PROMO =================
 bot.hears("🎨 Generate Promo", async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
-  if (!(await withPhone(ctx))) return  // admins also need phone? optional but we keep
+  // Admins don't need phone check
   try {
     await startPromoLanguageSelection(ctx)
   } catch (err) {
@@ -891,7 +865,7 @@ bot.hears("🎨 Generate Promo", async (ctx) => {
 
 // ================= LANGUAGE SELECTION CALLBACK =================
 bot.action(/promo_lang_(.+)/, async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     const lang = ctx.match[1]
     const userId = ctx.from.id
@@ -915,7 +889,7 @@ bot.action(/promo_lang_(.+)/, async (ctx) => {
 // ================= ADMIN MENU HANDLERS (ROBUST) =================
 bot.hears(/^(.*Deposit Problems.*|.*Withdrawal Problems.*|.*Agent Requests.*|.*Broadcast.*|.*Promo Activity.*|.*Generate Promo.*)$/, async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
-  if (!(await withPhone(ctx))) return
+  // Admins don't need phone check
   try {
     const text = ctx.message.text
 
@@ -998,7 +972,7 @@ bot.on("text", async (ctx) => {
       if (adminId) {
         bot.telegram.sendMessage(
           adminId,
-          `✉️ Reply from user @${ctx.from.username || ctx.from.first_name} (ID: ${userId}):\n\n${ctx.message.text}`,
+          `✉️ Reply from user ${displayUser(ctx)}:\n\n${ctx.message.text}`,
           Markup.inlineKeyboard([
             [Markup.button.callback("💬 Reply to user", `reply_${userId}`)]
           ])
@@ -1230,7 +1204,7 @@ bot.on(["photo", "video"], async (ctx) => {
     if (!ADMIN_IDS.includes(userId) && !session.state) {
       const adminId = userLastAdmin[userId]
       if (adminId) {
-        const caption = `📎 File from user @${ctx.from.username || ctx.from.first_name} (ID: ${userId})`
+        const caption = `📎 File from user ${displayUser(ctx)}`
         if (ctx.message.photo) {
           const fileId = ctx.message.photo.pop().file_id
           bot.telegram.sendPhoto(adminId, fileId, {
@@ -1328,7 +1302,7 @@ function showCalendar(ctx, session) {
 }
 
 bot.action(/date_(\d+)/, async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     const day = ctx.match[1]
     const session = getSession(ctx.from.id)
@@ -1346,7 +1320,7 @@ bot.action(/date_(\d+)/, async (ctx) => {
 })
 
 bot.action("prev_month", async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     const session = getSession(ctx.from.id)
     let { year, month } = session.calendar
@@ -1366,7 +1340,7 @@ bot.action("prev_month", async (ctx) => {
 })
 
 bot.action("next_month", async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     const session = getSession(ctx.from.id)
     let { year, month } = session.calendar
@@ -1395,7 +1369,7 @@ bot.action("ignore", async (ctx) => {
 
 // ================= RESTART / MAIN MENU =================
 bot.action("restart_player", async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     const userId = ctx.from.id
     clearSession(userId)
@@ -1420,7 +1394,7 @@ bot.action("restart_player", async (ctx) => {
 })
 
 bot.action("main_menu", async (ctx) => {
-  // phone check not needed because this just returns to menu
+  // Phone check not needed for main menu
   try {
     const userId = ctx.from.id
     clearSession(userId)
@@ -1439,8 +1413,7 @@ bot.action("main_menu", async (ctx) => {
 
 // ================= ADMIN ACTIONS =================
 bot.action(/resolve_(.+)_(\d+)/, async (ctx) => {
-  // admin actions – phone check not necessary for admins, but we can apply if desired
-  // We'll skip phone check for admins to keep admin flow fast.
+  // Admin actions – no phone check needed
   try {
     const trackId = ctx.match[1]
     const userId = parseInt(ctx.match[2])
@@ -1486,7 +1459,7 @@ bot.action(/rate_(.+)_(\d+)_(\d)/, async (ctx) => {
 
     await bot.telegram.sendMessage(
       adminId,
-      `📊 User @${ctx.from.username || ctx.from.first_name} (ID: ${userId}) rated request ${trackId} as: ${ratingText}`
+      `📊 User ${displayUser(ctx)} rated request ${trackId} as: ${ratingText}`
     )
 
     await ctx.editMessageText("Thank you for your feedback! 🙏")
@@ -1519,7 +1492,7 @@ bot.action(/reply_(\d+)/, (ctx) => {
 
 // ================= COUNTRY SELECTION =================
 bot.action(/player_select_(.+)/, async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     const country = ctx.match[1]
     const session = getSession(ctx.from.id)
@@ -1549,7 +1522,7 @@ bot.action(/player_select_(.+)/, async (ctx) => {
 
 // ================= ISSUE TYPE =================
 bot.action("player_issue_deposit", async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     const session = getSession(ctx.from.id)
     session.data.issueType = "Deposit"
@@ -1570,7 +1543,7 @@ bot.action("player_issue_deposit", async (ctx) => {
 })
 
 bot.action("player_issue_withdrawal", async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     const session = getSession(ctx.from.id)
     session.data.issueType = "Withdrawal"
@@ -1637,7 +1610,7 @@ function showIndiaPayments(ctx, session) {
 
 // ================= PAYMENT SELECTED =================
 bot.action(/pay_(.+)/, async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     const payment = ctx.match[1]
     const session = getSession(ctx.from.id)
@@ -1693,7 +1666,7 @@ Is this information correct?`
 
 // ================= SUBMIT =================
 bot.action("submit_player", async (ctx) => {
-  if (!(await withPhone(ctx))) return
+  if (!(await ensurePhone(ctx))) return
   try {
     const session = getSession(ctx.from.id)
     if (session.submitting) return
@@ -1835,7 +1808,7 @@ function showTicketList(ctx, category, page) {
 }
 
 bot.action(/^(deposit|withdrawal)_page_(\d+)$/, async (ctx) => {
-  // Admin action – no phone check needed
+  // Admin action – no phone check
   try {
     const category = ctx.match[1]
     const page = parseInt(ctx.match[2])
@@ -1907,4 +1880,4 @@ process.on('uncaughtException', (error) => {
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with Phone Requirement & Username Display")
+console.log("🚀 Bot Running with Phone Requirement & All Features Fixed")

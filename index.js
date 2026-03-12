@@ -4,46 +4,40 @@ const fsSync = require("fs")
 const path = require("path")
 const { Telegraf, Markup } = require("telegraf")
 const sharp = require("sharp")
+const mongoose = require("mongoose")
 
-// ================= OPTIONAL MONGODB =================
-let mongoose
-let User
-let isMongoConnected = false
-
+// ================= MONGODB CONNECTION (REQUIRED) =================
 const MONGODB_URI = process.env.MONGODB_URI
-if (MONGODB_URI) {
-  try {
-    mongoose = require("mongoose")
-    mongoose.connect(MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    })
-    .then(() => {
-      console.log("✅ MongoDB connected")
-      isMongoConnected = true
-    })
-    .catch(err => {
-      console.error("❌ MongoDB connection error:", err)
-      console.log("Continuing without MongoDB...")
-    })
-
-    const userSchema = new mongoose.Schema({
-      userId: { type: Number, required: true, unique: true },
-      username: String,
-      firstName: String,
-      lastName: String,
-      phone: String,
-      language: { type: String, default: 'en' },
-      createdAt: { type: Date, default: Date.now }
-    })
-    User = mongoose.model('User', userSchema)
-  } catch (err) {
-    console.error("Failed to initialize MongoDB:", err)
-    console.log("Continuing without MongoDB...")
-  }
-} else {
-  console.log("MONGODB_URI not set, running without MongoDB (JSON storage only)")
+if (!MONGODB_URI) {
+  console.error("MONGODB_URI is not defined in .env")
+  process.exit(1)
 }
+
+mongoose.connect(MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+.then(() => console.log("✅ MongoDB connected"))
+.catch(err => {
+  console.error("❌ MongoDB connection error:", err)
+  process.exit(1)
+})
+
+// ================= USER SCHEMA & MODEL =================
+const userSchema = new mongoose.Schema({
+  userId: { type: Number, required: true, unique: true },
+  username: String,
+  firstName: String,
+  lastName: String,
+  phone: String,
+  language: { type: String, default: 'en' },
+  isPlayer: { type: Boolean, default: false },
+  isAffiliate: { type: Boolean, default: false },
+  isAgent: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now }
+})
+
+const User = mongoose.model('User', userSchema)
 
 // ================= BOT INIT =================
 const bot = new Telegraf(process.env.BOT_TOKEN)
@@ -52,18 +46,14 @@ const ADMIN_IDS = process.env.ADMIN_IDS
   ? process.env.ADMIN_IDS.split(",").map(id => parseInt(id.trim()))
   : []
 
-// ================= PERSISTENT STORAGE (JSON) =================
+// ================= PERSISTENT STORAGE (JSON for non-user data) =================
 const TICKETS_FILE = "./tickets.json"
-const USERS_FILE = "./users.json"
 const PROMO_FILE = "./promo.json"
 const AGENT_FILE = "./agent.json"
-const PHONES_FILE = "./phones.json"   // for non-MongoDB phone storage
 
 let pendingTickets = []
-let allUsers = new Set()           // for broadcast and user list
 let promoActivities = []
 let agentRequests = []
-let phones = {}                    // userId -> phone (non-MongoDB)
 
 // Load JSON data
 try {
@@ -73,15 +63,6 @@ try {
   }
 } catch (err) {
   console.error("Error loading tickets:", err)
-}
-
-try {
-  if (fsSync.existsSync(USERS_FILE)) {
-    const data = fsSync.readFileSync(USERS_FILE, "utf8")
-    allUsers = new Set(JSON.parse(data))
-  }
-} catch (err) {
-  console.error("Error loading users from JSON:", err)
 }
 
 try {
@@ -102,34 +83,9 @@ try {
   console.error("Error loading agent requests:", err)
 }
 
-try {
-  if (fsSync.existsSync(PHONES_FILE)) {
-    phones = JSON.parse(fsSync.readFileSync(PHONES_FILE, "utf8"))
-  }
-} catch (err) {
-  console.error("Error loading phones:", err)
-}
-
-// ================= LOAD ALL USERS FROM MONGODB INTO SET (IF CONNECTED) =================
-async function loadAllUsersFromMongo() {
-  if (!isMongoConnected || !User) return
-  try {
-    const users = await User.find({}, 'userId')
-    users.forEach(u => allUsers.add(u.userId))
-    console.log(`✅ Loaded ${users.length} users from MongoDB into broadcast set`)
-  } catch (err) {
-    console.error("Error loading users from MongoDB:", err)
-  }
-}
-loadAllUsersFromMongo()
-
 // ================= SAVE FUNCTIONS FOR JSON FILES =================
 function saveTickets() {
   fsSync.writeFileSync(TICKETS_FILE, JSON.stringify(pendingTickets, null, 2))
-}
-
-function saveUsers() {
-  fsSync.writeFileSync(USERS_FILE, JSON.stringify([...allUsers]))
 }
 
 function savePromo() {
@@ -138,10 +94,6 @@ function savePromo() {
 
 function saveAgentRequests() {
   fsSync.writeFileSync(AGENT_FILE, JSON.stringify(agentRequests, null, 2))
-}
-
-function savePhones() {
-  fsSync.writeFileSync(PHONES_FILE, JSON.stringify(phones, null, 2))
 }
 
 // ================= SESSIONS =================
@@ -165,74 +117,45 @@ function clearSession(userId) {
   delete sessions[userId]
 }
 
-// ================= GET USER DATA (MongoDB or JSON) =================
-async function getUserData(userId) {
-  if (isMongoConnected && User) {
-    return await User.findOne({ userId })
-  }
-  // For non-MongoDB, return phone from phones object
-  if (phones[userId]) {
-    return { phone: phones[userId] }
-  }
-  return null
-}
-
-// ================= RECORD USER (MongoDB + local Set + phones) =================
-async function recordUser(ctx, phone = null) {
+// ================= RECORD USER (MongoDB only) =================
+async function recordUser(ctx, phone = null, flags = {}) {
   const userId = ctx.from.id
   const username = ctx.from.username
   const firstName = ctx.from.first_name
   const lastName = ctx.from.last_name
 
-  if (!allUsers.has(userId)) {
-    allUsers.add(userId)
-    saveUsers()
-  }
+  try {
+    const update = { userId, username, firstName, lastName }
+    if (phone) update.phone = phone
+    if (flags.isPlayer !== undefined) update.isPlayer = flags.isPlayer
+    if (flags.isAffiliate !== undefined) update.isAffiliate = flags.isAffiliate
+    if (flags.isAgent !== undefined) update.isAgent = flags.isAgent
 
-  if (isMongoConnected && User) {
-    try {
-      const update = { userId, username, firstName, lastName }
-      if (phone) update.phone = phone
-      await User.findOneAndUpdate(
-        { userId },
-        update,
-        { upsert: true, new: true }
-      )
-    } catch (err) {
-      console.error("Error saving user to MongoDB:", err)
-    }
-  } else {
-    // Store phone in phones.json
-    if (phone) {
-      phones[userId] = phone
-      savePhones()
-    }
+    await User.findOneAndUpdate(
+      { userId },
+      { $set: update, $setOnInsert: { createdAt: new Date() } },
+      { upsert: true, new: true }
+    )
+  } catch (err) {
+    console.error("Error saving user to MongoDB:", err)
   }
 }
 
 // ================= CHECK PHONE BEFORE PROCEEDING (skip for admins) =================
 async function ensurePhone(ctx) {
   const userId = ctx.from.id
-  // Admins are exempt
   if (ADMIN_IDS.includes(userId)) return true
 
-  const userData = await getUserData(userId)
-  let hasPhone = false
+  const user = await User.findOne({ userId })
+  if (user && user.phone) return true
 
-  if (userData && userData.phone) {
-    hasPhone = true
-  }
-
-  if (!hasPhone) {
-    await ctx.reply(
-      "Please share your phone number to continue:",
-      Markup.keyboard([
-        [Markup.button.contactRequest("📱 Share Contact")]
-      ]).resize().oneTime()
-    )
-    return false
-  }
-  return true
+  await ctx.reply(
+    "Please share your phone number to continue:",
+    Markup.keyboard([
+      [Markup.button.contactRequest("📱 Share Contact")]
+    ]).resize().oneTime()
+  )
+  return false
 }
 
 // ================= HELPER: safe username display =================
@@ -524,6 +447,11 @@ async function handleAgentResponse(ctx, country, response) {
     const countryName = countryNames[country] || country
     const isInterested = response === 'accept'
 
+    // Mark user as agent if interested
+    if (isInterested) {
+      await recordUser(ctx, null, { isAgent: true })
+    }
+
     await saveSubmission({
       userId,
       username: ctx.from.username,
@@ -613,7 +541,8 @@ function adminMenu() {
     ["📥 Deposit Problems", "📤 Withdrawal Problems"],
     ["🤝 Agent Requests", "📢 Broadcast"],
     ["📊 Promo Activity", "🎨 Generate Promo"],
-    ["👥 User List", "🔙 Main Menu"]      // 👈 New button added
+    ["👥 Players", "👥 Affiliates", "👥 Agents"],   // New category buttons
+    ["🔙 Main Menu"]
   ]).resize()
 }
 
@@ -621,29 +550,22 @@ function adminMenu() {
 bot.start(async (ctx) => {
   try {
     const userId = ctx.from.id
-    // If admin, skip phone check and go straight to admin menu
     if (ADMIN_IDS.includes(userId)) {
       return ctx.reply("Welcome Admin! Use the menu below to manage tickets.", adminMenu())
     }
 
-    // For normal users, check if phone exists
-    const userData = await getUserData(userId)
-    let hasPhone = false
-    if (userData && userData.phone) {
-      hasPhone = true
+    const user = await User.findOne({ userId })
+    if (user && user.phone) {
+      await recordUser(ctx) // update username etc.
+      return ctx.reply("Welcome back to Support Bot!", userMenu())
     }
 
-    if (!hasPhone) {
-      return ctx.reply(
-        "Please share your phone number to continue:",
-        Markup.keyboard([
-          [Markup.button.contactRequest("📱 Share Contact")]
-        ]).resize().oneTime()
-      )
-    }
-
-    await recordUser(ctx)
-    ctx.reply("Welcome to Support Bot", userMenu())
+    await ctx.reply(
+      "Please share your phone number to continue:",
+      Markup.keyboard([
+        [Markup.button.contactRequest("📱 Share Contact")]
+      ]).resize().oneTime()
+    )
   } catch (err) {
     console.error("Error in start handler:", err)
   }
@@ -657,7 +579,6 @@ bot.on("contact", async (ctx) => {
 
     await recordUser(ctx, phone)
 
-    // Now show main menu
     if (ADMIN_IDS.includes(userId)) {
       ctx.reply("Thank you! Use the menu below.", adminMenu())
     } else {
@@ -671,11 +592,9 @@ bot.on("contact", async (ctx) => {
 // ================= MAIN MENU HANDLER =================
 bot.hears("🔙 Main Menu", async (ctx) => {
   try {
-    // For admins, skip phone check
     if (ADMIN_IDS.includes(ctx.from.id)) {
       return ctx.reply("Admin menu:", adminMenu())
     }
-    // For users, ensure phone exists
     if (!(await ensurePhone(ctx))) return
     ctx.reply("Main menu:", userMenu())
   } catch (err) {
@@ -687,7 +606,7 @@ bot.hears("🔙 Main Menu", async (ctx) => {
 bot.hears("Player Support", async (ctx) => {
   if (!(await ensurePhone(ctx))) return
   try {
-    await recordUser(ctx)
+    await recordUser(ctx, null, { isPlayer: true }) // mark as player
     const userId = ctx.from.id
     clearSession(userId)
 
@@ -713,7 +632,7 @@ bot.hears("Player Support", async (ctx) => {
 bot.hears("Affiliate Support", async (ctx) => {
   if (!(await ensurePhone(ctx))) return
   try {
-    await recordUser(ctx)
+    await recordUser(ctx, null, { isAffiliate: true }) // mark as affiliate
     const userId = ctx.from.id
     clearSession(userId)
 
@@ -741,7 +660,7 @@ bot.hears("Affiliate Support", async (ctx) => {
 bot.hears("Become Agent", async (ctx) => {
   if (!(await ensurePhone(ctx))) return
   try {
-    await recordUser(ctx)
+    // Note: user becomes agent only after accepting terms (in handleAgentResponse)
     const userId = ctx.from.id
     clearSession(userId)
     await agentFlow(ctx)
@@ -858,6 +777,7 @@ bot.action(/agent_(accept|reject)_(.+)/, async (ctx) => {
 bot.action("affiliate_promo_banner", async (ctx) => {
   if (!(await ensurePhone(ctx))) return
   try {
+    await recordUser(ctx, null, { isAffiliate: true }) // ensure affiliate flag
     await startPromoLanguageSelection(ctx)
     await ctx.answerCbQuery().catch(() => {})
   } catch (err) {
@@ -869,7 +789,6 @@ bot.action("affiliate_promo_banner", async (ctx) => {
 // ================= ADMIN GENERATE PROMO =================
 bot.hears("🎨 Generate Promo", async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
-  // Admins don't need phone check
   try {
     await startPromoLanguageSelection(ctx)
   } catch (err) {
@@ -900,89 +819,107 @@ bot.action(/promo_lang_(.+)/, async (ctx) => {
   }
 })
 
-// ================= ADMIN MENU HANDLERS (ROBUST) =================
-bot.hears(/^(.*Deposit Problems.*|.*Withdrawal Problems.*|.*Agent Requests.*|.*Broadcast.*|.*Promo Activity.*|.*Generate Promo.*|.*User List.*)$/, async (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  // Admins don't need phone check
+// ================= CATEGORY USER LIST HANDLERS =================
+async function showUserList(ctx, category) {
   try {
-    const text = ctx.message.text
+    let query = {}
+    if (category === 'players') query = { isPlayer: true }
+    else if (category === 'affiliates') query = { isAffiliate: true }
+    else if (category === 'agents') query = { isAgent: true }
 
-    if (text.includes("Deposit Problems")) {
-      showTicketList(ctx, "deposit", 0)
-    } else if (text.includes("Withdrawal Problems")) {
-      showTicketList(ctx, "withdrawal", 0)
-    } else if (text.includes("Agent Requests")) {
-      if (agentRequests.length === 0) {
-        return ctx.reply("No agent requests yet.")
-      }
-      let msg = "🤝 **Agent Requests**\n\n"
-      const recent = [...agentRequests].reverse().slice(0, 10)
-      recent.forEach((req, i) => {
-        const user = req.username ? `@${req.username}` : `ID: ${req.userId}`
-        const status = req.interested ? "✅ Accepted" : "❌ Rejected"
-        msg += `${i+1}. ${user} | ${req.country} | ${status} | ${new Date(req.timestamp).toLocaleString()}\n`
+    const users = await User.find(query).sort({ createdAt: -1 }).limit(10)
+    const total = await User.countDocuments(query)
+
+    let msg = `👥 **${category.charAt(0).toUpperCase() + category.slice(1)}** (Total: ${total})\n\n`
+    if (users.length === 0) {
+      msg += "No users in this category."
+    } else {
+      users.forEach((u, i) => {
+        const name = u.username ? `@${u.username}` : `ID: ${u.userId}`
+        msg += `${i+1}. ${name}\n`
       })
-      ctx.reply(msg, { parse_mode: "Markdown" })
-    } else if (text.includes("Broadcast")) {
-      const session = getSession(ctx.from.id)
-      session.state = "admin_broadcast"
-      ctx.reply("📢 Please enter the message you want to broadcast to all users:")
-    } else if (text.includes("Promo Activity")) {
-      if (promoActivities.length === 0) {
-        return ctx.reply("No promo activity yet.")
-      }
-      let msg = "📊 **Promo Banner Requests**\n\n"
-      const recent = [...promoActivities].reverse().slice(0, 10)
-      recent.forEach((p, i) => {
-        const user = p.username ? `@${p.username}` : `ID: ${p.userId}`
-        msg += `${i+1}. ${user} | Code: **${p.promoCode}** | Lang: ${p.language} | ${new Date(p.timestamp).toLocaleString()}\n`
-      })
-      ctx.reply(msg, { parse_mode: "Markdown" })
-    } else if (text.includes("Generate Promo")) {
-      startPromoLanguageSelection(ctx)
-    } else if (text.includes("User List")) {    // 👈 New handler
-      const total = allUsers.size
-      let msg = `👥 **Total Users:** ${total}\n\n`
-      if (total > 0) {
-        msg += "**Recent User IDs:**\n"
-        const recent = [...allUsers].slice(-10).reverse()
-        recent.forEach((id, i) => {
-          msg += `${i+1}. \`${id}\`\n`
-        })
-        msg += "\n_(Enable MongoDB to show usernames)_"
-      }
-      ctx.reply(msg, { parse_mode: "Markdown" })
     }
+    ctx.reply(msg, { parse_mode: "Markdown" })
   } catch (err) {
-    console.error("Error in admin menu handler:", err)
+    console.error(`Error in showUserList for ${category}:`, err)
+    ctx.reply("Error fetching user list.")
   }
+}
+
+bot.hears("👥 Players", async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  await showUserList(ctx, 'players')
+})
+
+bot.hears("👥 Affiliates", async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  await showUserList(ctx, 'affiliates')
+})
+
+bot.hears("👥 Agents", async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  await showUserList(ctx, 'agents')
+})
+
+// ================= BROADCAST WITH CATEGORY =================
+let broadcastCategory = null // store temporarily in session
+
+bot.hears("📢 Broadcast", async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  const session = getSession(ctx.from.id)
+  session.state = "admin_broadcast_category"
+  await ctx.reply(
+    "Select broadcast target:",
+    Markup.inlineKeyboard([
+      [Markup.button.callback("All Users", "broadcast_all")],
+      [Markup.button.callback("Players", "broadcast_players")],
+      [Markup.button.callback("Affiliates", "broadcast_affiliates")],
+      [Markup.button.callback("Agents", "broadcast_agents")],
+      [Markup.button.callback("Cancel", "main_menu")]
+    ])
+  )
+})
+
+bot.action(/broadcast_(.+)/, async (ctx) => {
+  const category = ctx.match[1] // all, players, affiliates, agents
+  const adminId = ctx.from.id
+  const session = getSession(adminId)
+  session.state = "admin_broadcast_message"
+  session.broadcastCategory = category
+  await ctx.editMessageText(`📢 You selected: **${category}**.\nNow type the message to broadcast.`)
+  await ctx.answerCbQuery().catch(() => {})
 })
 
 // ================= TEXT HANDLER =================
 bot.on("text", async (ctx) => {
-  // Phone check is not needed here because this handles many flows;
-  // we'll rely on session state to know if user is in a flow.
   try {
     const session = getSession(ctx.from.id)
     const userId = ctx.from.id
-    await recordUser(ctx)
+    // We don't record user here to avoid infinite loops; only record when needed (handled in specific flows)
 
-    // ADMIN BROADCAST
-    if (ADMIN_IDS.includes(userId) && session.state === "admin_broadcast") {
+    // ADMIN BROADCAST MESSAGE
+    if (ADMIN_IDS.includes(userId) && session.state === "admin_broadcast_message") {
       const message = ctx.message.text
+      const category = session.broadcastCategory // 'all', 'players', 'affiliates', 'agents'
+      let query = {}
+      if (category === 'players') query = { isPlayer: true }
+      else if (category === 'affiliates') query = { isAffiliate: true }
+      else if (category === 'agents') query = { isAgent: true }
+      // 'all' means no filter
+
+      const users = await User.find(query, 'userId')
+      const userIds = users.map(u => u.userId)
+      const total = userIds.length
+
+      ctx.reply(`Broadcasting to ${total} users in category "${category}"...`)
+
       let successCount = 0
       let failCount = 0
-
-      ctx.reply(`Broadcasting to ${allUsers.size} users...`)
-
-      const promises = []
-      allUsers.forEach((uid) => {
-        promises.push(
-          bot.telegram.sendMessage(uid, `📢 Broadcast from admin:\n\n${message}`)
-            .then(() => successCount++)
-            .catch(() => failCount++)
-        )
-      })
+      const promises = userIds.map(uid =>
+        bot.telegram.sendMessage(uid, `📢 Broadcast from admin (${category}):\n\n${message}`)
+          .then(() => successCount++)
+          .catch(() => failCount++)
+      )
 
       Promise.all(promises).then(() => {
         ctx.reply(`✅ Broadcast finished.\nSent: ${successCount}\nFailed: ${failCount}`)
@@ -1173,17 +1110,21 @@ async function deliverPromoMaterials(ctx, session, userId) {
     }
     try { await fs.rmdir(tempFolder) } catch {}
 
-    await saveSubmission({
+    // Save promo activity
+    promoActivities.push({
       userId,
       username: ctx.from.username,
-      data: {
-        promoCode,
-        bannerLanguage,
-        filesDelivered: sentCount,
-        totalFiles: imageFiles.length,
-        failedFiles: failedCount
-      }
+      promoCode,
+      language: bannerLanguage,
+      filesDelivered: sentCount,
+      totalFiles: imageFiles.length,
+      failedFiles: failedCount,
+      timestamp: Date.now()
     })
+    savePromo()
+
+    // Mark user as affiliate
+    await recordUser(ctx, null, { isAffiliate: true })
 
     const adminMsg = `🎨 Promo Banner Request Complete\n\n` +
       `Name: ${userData.name}\n` +
@@ -1225,7 +1166,6 @@ bot.on(["photo", "video"], async (ctx) => {
   try {
     const session = getSession(ctx.from.id)
     const userId = ctx.from.id
-    await recordUser(ctx)
 
     if (!ADMIN_IDS.includes(userId) && !session.state) {
       const adminId = userLastAdmin[userId]
@@ -1420,7 +1360,6 @@ bot.action("restart_player", async (ctx) => {
 })
 
 bot.action("main_menu", async (ctx) => {
-  // Phone check not needed for main menu
   try {
     const userId = ctx.from.id
     clearSession(userId)
@@ -1439,7 +1378,6 @@ bot.action("main_menu", async (ctx) => {
 
 // ================= ADMIN ACTIONS =================
 bot.action(/resolve_(.+)_(\d+)/, async (ctx) => {
-  // Admin actions – no phone check needed
   try {
     const trackId = ctx.match[1]
     const userId = parseInt(ctx.match[2])
@@ -1720,6 +1658,9 @@ bot.action("submit_player", async (ctx) => {
     pendingTickets.push(ticket)
     saveTickets()
 
+    // Mark user as player
+    await recordUser(ctx, null, { isPlayer: true })
+
     const message = `🎫 Player Request\nTrack ID: ${trackId}
 
 User: ${ctx.from.first_name} ${username ? `(@${username})` : "(no username)"}
@@ -1834,7 +1775,6 @@ function showTicketList(ctx, category, page) {
 }
 
 bot.action(/^(deposit|withdrawal)_page_(\d+)$/, async (ctx) => {
-  // Admin action – no phone check
   try {
     const category = ctx.match[1]
     const page = parseInt(ctx.match[2])
@@ -1847,7 +1787,6 @@ bot.action(/^(deposit|withdrawal)_page_(\d+)$/, async (ctx) => {
 })
 
 bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
-  // Admin action – no phone check
   try {
     const category = ctx.match[1]
     const trackId = ctx.match[2]
@@ -1906,4 +1845,4 @@ process.on('uncaughtException', (error) => {
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with User List & All Features Fixed")
+console.log("🚀 Bot Running with Category-Based User Lists & Broadcast")

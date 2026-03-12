@@ -57,11 +57,13 @@ const TICKETS_FILE = "./tickets.json"
 const USERS_FILE = "./users.json"
 const PROMO_FILE = "./promo.json"
 const AGENT_FILE = "./agent.json"
+const PHONES_FILE = "./phones.json"   // for non-MongoDB phone storage
 
 let pendingTickets = []
 let allUsers = new Set()           // for broadcast
 let promoActivities = []
 let agentRequests = []
+let phones = {}                    // userId -> phone (non-MongoDB)
 
 // Load JSON data
 try {
@@ -100,6 +102,14 @@ try {
   console.error("Error loading agent requests:", err)
 }
 
+try {
+  if (fsSync.existsSync(PHONES_FILE)) {
+    phones = JSON.parse(fsSync.readFileSync(PHONES_FILE, "utf8"))
+  }
+} catch (err) {
+  console.error("Error loading phones:", err)
+}
+
 // ================= LOAD ALL USERS FROM MONGODB INTO SET (IF CONNECTED) =================
 async function loadAllUsersFromMongo() {
   if (!isMongoConnected || !User) return
@@ -130,6 +140,10 @@ function saveAgentRequests() {
   fsSync.writeFileSync(AGENT_FILE, JSON.stringify(agentRequests, null, 2))
 }
 
+function savePhones() {
+  fsSync.writeFileSync(PHONES_FILE, JSON.stringify(phones, null, 2))
+}
+
 // ================= SESSIONS =================
 const sessions = {}
 const userLastAdmin = {}
@@ -156,14 +170,14 @@ async function getUserData(userId) {
   if (isMongoConnected && User) {
     return await User.findOne({ userId })
   }
-  // If no MongoDB, try to read from session (phone stored in session)
-  if (sessions[userId] && sessions[userId].phone) {
-    return { phone: sessions[userId].phone }
+  // For non-MongoDB, return phone from phones object
+  if (phones[userId]) {
+    return { phone: phones[userId] }
   }
   return null
 }
 
-// ================= RECORD USER (MongoDB + local Set) =================
+// ================= RECORD USER (MongoDB + local Set + phones) =================
 async function recordUser(ctx, phone = null) {
   const userId = ctx.from.id
   const username = ctx.from.username
@@ -188,10 +202,10 @@ async function recordUser(ctx, phone = null) {
       console.error("Error saving user to MongoDB:", err)
     }
   } else {
-    // If no MongoDB, store phone in session
+    // Store phone in phones.json
     if (phone) {
-      if (!sessions[userId]) sessions[userId] = {}
-      sessions[userId].phone = phone
+      phones[userId] = phone
+      savePhones()
     }
   }
 }
@@ -1880,4 +1894,4 @@ process.on('uncaughtException', (error) => {
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with Phone Requirement & All Features Fixed")
+console.log("🚀 Bot Running with One-Time Phone Requirement & All Features Fixed")

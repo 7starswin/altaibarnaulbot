@@ -1112,7 +1112,7 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
   }
 })
 
-// ================= DELIVER PROMO MATERIALS (FIXED WITH DEBUG) =================
+// ================= DELIVER PROMO MATERIALS (FIXED WITH FALLBACK) =================
 async function deliverPromoMaterials(ctx, session, userId) {
   try {
     const { bannerLanguage, promoCategory, promoCode } = session.data
@@ -1235,7 +1235,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
       return
     }
 
-    // Send images in groups of up to 10
+    // Send images – try media group first, fallback to individual sends
     const groupSize = 10
     for (let i = 0; i < processedImages.length; i += groupSize) {
       const group = processedImages.slice(i, i + groupSize)
@@ -1245,11 +1245,20 @@ async function deliverPromoMaterials(ctx, session, userId) {
       }))
       try {
         await ctx.replyWithMediaGroup(mediaGroup)
-        console.log(`📤 Sent group of ${group.length} images`)
-        await delay(1000)
+        console.log(`📤 Sent group of ${group.length} images via media group`)
       } catch (err) {
-        console.error('Error sending media group:', err)
+        console.error('Media group failed, sending individually:', err)
+        // Fallback: send one by one
+        for (const imgPath of group) {
+          try {
+            await ctx.replyWithPhoto({ source: imgPath })
+            await delay(500) // small delay to avoid rate limits
+          } catch (singleErr) {
+            console.error('Failed to send single image:', singleErr)
+          }
+        }
       }
+      await delay(1000) // delay between groups
     }
 
     // Cleanup temp files

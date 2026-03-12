@@ -188,11 +188,13 @@ async function ensureFolder(folderPath) {
   }
 }
 
-async function getFilesInFolder(folderPath) {
+// Case‑insensitive file filter
+async function getImageFiles(folderPath) {
   try {
     const files = await fs.readdir(folderPath)
     return files.filter(f => f.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i))
   } catch (err) {
+    console.error(`Error reading folder ${folderPath}:`, err)
     return []
   }
 }
@@ -1106,7 +1108,7 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
   }
 })
 
-// ================= DELIVER PROMO MATERIALS (OPTIMIZED) =================
+// ================= DELIVER PROMO MATERIALS (FIXED) =================
 async function deliverPromoMaterials(ctx, session, userId) {
   try {
     const { bannerLanguage, promoCategory, promoCode } = session.data
@@ -1125,13 +1127,19 @@ async function deliverPromoMaterials(ctx, session, userId) {
       return
     }
 
+    // Build absolute path
     const folderPath = path.join(__dirname, 'assets', bannerLanguage, promoCategory, 'banners')
     const tempFolder = path.join(__dirname, 'temp', userId.toString())
+
+    console.log(`Looking for banners in: ${folderPath}`) // DEBUG
 
     await ensureFolder(folderPath)
     await ensureFolder(tempFolder)
 
-    const imageFiles = await getFilesInFolder(folderPath)
+    // Get images with case‑insensitive matching
+    const imageFiles = await getImageFiles(folderPath)
+    console.log(`Found ${imageFiles.length} image files:`, imageFiles) // DEBUG
+
     if (imageFiles.length === 0) {
       await ctx.reply(`⚠️ No banners found for ${bannerLanguage}/${promoCategory}. Please check your assets.`)
       return

@@ -1172,7 +1172,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
     console.error('Promo delivery error:', error)
     try { await ctx.reply(`⚠️ ${loadLanguage('en').error_processing_banners}`) } catch {}
   }
-})
+}
 
 // ================= FILE HANDLER =================
 bot.on(["photo", "video"], async (ctx) => {

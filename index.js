@@ -188,11 +188,13 @@ async function ensureFolder(folderPath) {
   }
 }
 
+// Case‑insensitive image file filter
 async function getImageFiles(folderPath) {
   try {
     const files = await fs.readdir(folderPath)
     return files.filter(f => f.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i))
   } catch (err) {
+    console.error(`Error reading folder ${folderPath}:`, err)
     return []
   }
 }
@@ -264,7 +266,7 @@ const translations = {
     football_promo: "Football Promo",
     matchday_promo: "Matchday Promo",
     video_promo: "Video Promo",
-    all_promo: "ALL PROMO",                 // new option
+    all_promo: "ALL PROMO",
     type_your_promo: "Type Your Promo Code",
     enter_promo_code_message: "Enter your promo code (max 10 characters) that will be added to the banners:",
     invalid_promo_code: "Invalid promo code. Please use max 10 characters.",
@@ -354,7 +356,6 @@ bot.action(/promo_lang_(.+)/, async (ctx) => {
     session.data.bannerLanguage = lang
     session.data.promoFlow = "select_category"
 
-    // Category selection now includes "ALL PROMO"
     await ctx.editMessageText(
       `📂 Select promo category:`,
       Markup.inlineKeyboard([
@@ -382,7 +383,7 @@ bot.action(/promo_lang_(.+)/, async (ctx) => {
 bot.action(/promo_cat_(.+)/, async (ctx) => {
   if (!(await ensurePhone(ctx))) return
   try {
-    const category = ctx.match[1] // cricket, football, matchday, video, or all
+    const category = ctx.match[1] // cricket, football, matchday, video, all
     const userId = ctx.from.id
     const session = getSession(userId)
     const texts = loadLanguage("en")
@@ -1111,7 +1112,7 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
   }
 })
 
-// ================= DELIVER PROMO MATERIALS (WITH ALL PROMO SUPPORT) =================
+// ================= DELIVER PROMO MATERIALS (FIXED WITH DEBUG) =================
 async function deliverPromoMaterials(ctx, session, userId) {
   try {
     const { bannerLanguage, promoCategory, promoCode } = session.data
@@ -1142,12 +1143,16 @@ async function deliverPromoMaterials(ctx, session, userId) {
       categories = [promoCategory]
     }
 
+    console.log(`🎯 Processing promo for ${bannerLanguage}/${promoCategory}, categories:`, categories)
+
     // Collect all image files from all relevant categories
     let allImageFiles = []
     for (const cat of categories) {
       const folderPath = path.join(__dirname, 'assets', bannerLanguage, cat, 'banners')
+      console.log(`📁 Checking folder: ${folderPath}`)
       await ensureFolder(folderPath) // ensure it exists (creates if not)
       const files = await getImageFiles(folderPath)
+      console.log(`   Found ${files.length} files in ${cat}:`, files)
       // Prepend category name to avoid filename collisions when processing
       const withCat = files.map(f => ({ cat, file: f }))
       allImageFiles = allImageFiles.concat(withCat)
@@ -1208,7 +1213,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
 
           return outputPath
         } catch (err) {
-          console.error(`Error processing ${cat}/${file}:`, err)
+          console.error(`❌ Error processing ${cat}/${file}:`, err)
           return null
         }
       })
@@ -1240,6 +1245,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
       }))
       try {
         await ctx.replyWithMediaGroup(mediaGroup)
+        console.log(`📤 Sent group of ${group.length} images`)
         await delay(1000)
       } catch (err) {
         console.error('Error sending media group:', err)
@@ -1252,7 +1258,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
     }
     try { await fs.rmdir(tempFolder) } catch {}
 
-    // Save promo activity (use promoCategory as stored)
+    // Save promo activity
     promoActivities.push({
       userId,
       username: ctx.from.username,
@@ -1299,7 +1305,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
     clearSession(userId)
 
   } catch (error) {
-    console.error('Promo delivery error:', error)
+    console.error('❌ Promo delivery error:', error)
     try {
       await ctx.reply(`❌ An error occurred while generating banners. Please check the logs.`)
     } catch {}

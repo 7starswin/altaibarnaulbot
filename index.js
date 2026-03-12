@@ -1151,7 +1151,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
               x="50%" 
               y="85%" 
               text-anchor="middle" 
-              font-family="Azo Sans Uber, 'Arial Black', Impact, sans-serif"
+              font-family="Impact, 'Bebas Neue', 'Anton', 'Oswald', Arial Black, Arial, sans-serif"
               font-size="${fontSize}" 
               font-weight="900"
               fill="#ff00a2" 

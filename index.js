@@ -1142,25 +1142,24 @@ async function deliverPromoMaterials(ctx, session, userId) {
         // Adjust font size as needed
         const fontSize = Math.max(54, Math.min(width * 0.091, 115))
 
-     // ===== IMPORTANT: Adjust x and y to match your banner's promo box =====
-const textSvg = `
-  <svg width="${width}" height="${height}">
-    <text 
-      x="50%" 
-      y="85%" 
-      text-anchor="middle" 
-      font-family="Azo Sans Uber, 'Arial Black', Impact, sans-serif"
-      font-size="${fontSize}" 
-      font-weight="900"                // Maximum boldness
-      fill="#ff00a2" 
-      stroke="black"
-      stroke-width="4"                 // Thick outline for extra boldness
-      paint-order="stroke"
-      letter-spacing="2px"
-      text-transform="uppercase"
-    >${promoCode}</text>
-  </svg>
-`
+        // ===== IMPORTANT: Adjust x and y to match your banner's promo box =====
+        const textSvg = `
+          <svg width="${width}" height="${height}">
+            <text 
+              x="50%" 
+              y="85%" 
+              text-anchor="middle" 
+              font-family="Azo Sans Uber, 'Arial Black', Impact, sans-serif"
+              font-size="${fontSize}" 
+              font-weight="900"
+              fill="#ff00a2" 
+              stroke="black"
+              stroke-width="4"
+              paint-order="stroke"
+              letter-spacing="2px"
+              text-transform="uppercase"
+            >${promoCode}</text>
+          </svg>
         `
 
         await image

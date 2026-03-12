@@ -188,13 +188,11 @@ async function ensureFolder(folderPath) {
   }
 }
 
-// Case‑insensitive file filter
 async function getImageFiles(folderPath) {
   try {
     const files = await fs.readdir(folderPath)
     return files.filter(f => f.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i))
   } catch (err) {
-    console.error(`Error reading folder ${folderPath}:`, err)
     return []
   }
 }
@@ -266,6 +264,7 @@ const translations = {
     football_promo: "Football Promo",
     matchday_promo: "Matchday Promo",
     video_promo: "Video Promo",
+    all_promo: "ALL PROMO",                 // new option
     type_your_promo: "Type Your Promo Code",
     enter_promo_code_message: "Enter your promo code (max 10 characters) that will be added to the banners:",
     invalid_promo_code: "Invalid promo code. Please use max 10 characters.",
@@ -355,6 +354,7 @@ bot.action(/promo_lang_(.+)/, async (ctx) => {
     session.data.bannerLanguage = lang
     session.data.promoFlow = "select_category"
 
+    // Category selection now includes "ALL PROMO"
     await ctx.editMessageText(
       `📂 Select promo category:`,
       Markup.inlineKeyboard([
@@ -365,6 +365,9 @@ bot.action(/promo_lang_(.+)/, async (ctx) => {
         [
           Markup.button.callback(`📅 ${texts.matchday_promo}`, `promo_cat_matchday`),
           Markup.button.callback(`🎥 ${texts.video_promo}`, `promo_cat_video`)
+        ],
+        [
+          Markup.button.callback(`🌟 ${texts.all_promo}`, `promo_cat_all`)
         ],
         [Markup.button.callback(texts.back, "main_menu")]
       ])
@@ -379,7 +382,7 @@ bot.action(/promo_lang_(.+)/, async (ctx) => {
 bot.action(/promo_cat_(.+)/, async (ctx) => {
   if (!(await ensurePhone(ctx))) return
   try {
-    const category = ctx.match[1]
+    const category = ctx.match[1] // cricket, football, matchday, video, or all
     const userId = ctx.from.id
     const session = getSession(userId)
     const texts = loadLanguage("en")
@@ -1108,7 +1111,7 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
   }
 })
 
-// ================= DELIVER PROMO MATERIALS (FIXED) =================
+// ================= DELIVER PROMO MATERIALS (WITH ALL PROMO SUPPORT) =================
 async function deliverPromoMaterials(ctx, session, userId) {
   try {
     const { bannerLanguage, promoCategory, promoCode } = session.data
@@ -1121,31 +1124,44 @@ async function deliverPromoMaterials(ctx, session, userId) {
     }
 
     const validLangs = ['en', 'bn', 'hi', 'tr', 'th', 'eg']
-    const validCats = ['cricket', 'football', 'matchday', 'video']
-    if (!validLangs.includes(bannerLanguage) || !validCats.includes(promoCategory)) {
-      await ctx.reply(`⚠️ ${texts.category_not_available}`)
+    if (!validLangs.includes(bannerLanguage)) {
+      await ctx.reply(`⚠️ ${texts.language_not_available}`)
       return
     }
 
-    // Build absolute path
-    const folderPath = path.join(__dirname, 'assets', bannerLanguage, promoCategory, 'banners')
-    const tempFolder = path.join(__dirname, 'temp', userId.toString())
+    // Determine which categories to process
+    let categories = []
+    if (promoCategory === 'all') {
+      categories = ['cricket', 'football', 'matchday', 'video']
+    } else {
+      const validCats = ['cricket', 'football', 'matchday', 'video']
+      if (!validCats.includes(promoCategory)) {
+        await ctx.reply(`⚠️ ${texts.category_not_available}`)
+        return
+      }
+      categories = [promoCategory]
+    }
 
-    console.log(`Looking for banners in: ${folderPath}`) // DEBUG
+    // Collect all image files from all relevant categories
+    let allImageFiles = []
+    for (const cat of categories) {
+      const folderPath = path.join(__dirname, 'assets', bannerLanguage, cat, 'banners')
+      await ensureFolder(folderPath) // ensure it exists (creates if not)
+      const files = await getImageFiles(folderPath)
+      // Prepend category name to avoid filename collisions when processing
+      const withCat = files.map(f => ({ cat, file: f }))
+      allImageFiles = allImageFiles.concat(withCat)
+    }
 
-    await ensureFolder(folderPath)
-    await ensureFolder(tempFolder)
-
-    // Get images with case‑insensitive matching
-    const imageFiles = await getImageFiles(folderPath)
-    console.log(`Found ${imageFiles.length} image files:`, imageFiles) // DEBUG
-
-    if (imageFiles.length === 0) {
+    if (allImageFiles.length === 0) {
       await ctx.reply(`⚠️ No banners found for ${bannerLanguage}/${promoCategory}. Please check your assets.`)
       return
     }
 
-    await ctx.reply(`📄 Processing ${imageFiles.length} banners with promo '${promoCode}' in ${bannerLanguage}/${promoCategory}...`)
+    await ctx.reply(`📄 Processing ${allImageFiles.length} banners with promo '${promoCode}' in ${bannerLanguage}/${promoCategory}...`)
+
+    const tempFolder = path.join(__dirname, 'temp', userId.toString())
+    await ensureFolder(tempFolder)
 
     let sentCount = 0
     let failedCount = 0
@@ -1153,12 +1169,13 @@ async function deliverPromoMaterials(ctx, session, userId) {
 
     // Process images concurrently (limit 5 at a time)
     const concurrencyLimit = 5
-    for (let i = 0; i < imageFiles.length; i += concurrencyLimit) {
-      const chunk = imageFiles.slice(i, i + concurrencyLimit)
-      const promises = chunk.map(async (fileName) => {
+    for (let i = 0; i < allImageFiles.length; i += concurrencyLimit) {
+      const chunk = allImageFiles.slice(i, i + concurrencyLimit)
+      const promises = chunk.map(async ({ cat, file }) => {
         try {
-          const inputPath = path.join(folderPath, fileName)
-          const outputPath = path.join(tempFolder, `${promoCode}_${fileName}`)
+          const inputPath = path.join(__dirname, 'assets', bannerLanguage, cat, 'banners', file)
+          // Use category in output filename to avoid overwrites
+          const outputPath = path.join(tempFolder, `${cat}_${promoCode}_${file}`)
 
           const image = sharp(inputPath)
           const { width, height } = await image.metadata()
@@ -1191,7 +1208,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
 
           return outputPath
         } catch (err) {
-          console.error(`Error processing ${fileName}:`, err)
+          console.error(`Error processing ${cat}/${file}:`, err)
           return null
         }
       })
@@ -1235,7 +1252,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
     }
     try { await fs.rmdir(tempFolder) } catch {}
 
-    // Save promo activity
+    // Save promo activity (use promoCategory as stored)
     promoActivities.push({
       userId,
       username: ctx.from.username,
@@ -1243,7 +1260,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
       language: bannerLanguage,
       category: promoCategory,
       filesDelivered: sentCount,
-      totalFiles: imageFiles.length,
+      totalFiles: allImageFiles.length,
       failedFiles: failedCount,
       timestamp: Date.now()
     })
@@ -1258,7 +1275,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
       `Language: ${bannerLanguage.toUpperCase()}\n` +
       `Category: ${promoCategory}\n` +
       `Promo Code: ${promoCode}\n` +
-      `Files Sent: ${sentCount}/${imageFiles.length}\n` +
+      `Files Sent: ${sentCount}/${allImageFiles.length}\n` +
       `Failed: ${failedCount}\n` +
       `Date: ${formatDate()}`
     await logToAdmin(bot, ADMIN_IDS, adminMsg)

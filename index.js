@@ -4,50 +4,40 @@ const fsSync = require("fs")
 const path = require("path")
 const { Telegraf, Markup } = require("telegraf")
 const sharp = require("sharp")
+const mongoose = require("mongoose")
 
-// ================= OPTIONAL MONGODB =================
-let mongoose
-let User
-let isMongoConnected = false
-
+// ================= MONGODB CONNECTION (REQUIRED) =================
 const MONGODB_URI = process.env.MONGODB_URI
-if (MONGODB_URI) {
-  try {
-    mongoose = require("mongoose")
-    mongoose.connect(MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    })
-    .then(() => {
-      console.log("✅ MongoDB connected")
-      isMongoConnected = true
-    })
-    .catch(err => {
-      console.error("❌ MongoDB connection error:", err)
-      console.log("Continuing without MongoDB...")
-    })
-
-    // Schema matches your existing user data
-    const userSchema = new mongoose.Schema({
-      userId: { type: Number, required: true, unique: true },
-      username: String,
-      firstName: String,
-      lastName: String,
-      phone: String,
-      language: { type: String, default: 'en' },
-      isPlayer: { type: Boolean, default: false },
-      isAffiliate: { type: Boolean, default: false },
-      isAgent: { type: Boolean, default: false },
-      createdAt: { type: Date, default: Date.now }
-    })
-    User = mongoose.model('User', userSchema)
-  } catch (err) {
-    console.error("Failed to initialize MongoDB:", err)
-    console.log("Continuing without MongoDB...")
-  }
-} else {
-  console.log("MONGODB_URI not set, running with JSON storage only")
+if (!MONGODB_URI) {
+  console.error("❌ MONGODB_URI is not defined in environment variables")
+  process.exit(1)
 }
+
+mongoose.connect(MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+.then(() => console.log("✅ MongoDB connected"))
+.catch(err => {
+  console.error("❌ MongoDB connection error:", err)
+  process.exit(1)
+})
+
+// ================= USER SCHEMA & MODEL =================
+const userSchema = new mongoose.Schema({
+  userId: { type: Number, required: true, unique: true },
+  username: String,
+  firstName: String,
+  lastName: String,
+  phone: String,
+  language: { type: String, default: 'en' },
+  isPlayer: { type: Boolean, default: false },
+  isAffiliate: { type: Boolean, default: false },
+  isAgent: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now }
+})
+
+const User = mongoose.model('User', userSchema)
 
 // ================= BOT INIT =================
 const bot = new Telegraf(process.env.BOT_TOKEN)
@@ -56,18 +46,14 @@ const ADMIN_IDS = process.env.ADMIN_IDS
   ? process.env.ADMIN_IDS.split(",").map(id => parseInt(id.trim()))
   : []
 
-// ================= PERSISTENT STORAGE (JSON) =================
+// ================= PERSISTENT STORAGE (JSON for non-user data) =================
 const TICKETS_FILE = "./tickets.json"
 const PROMO_FILE = "./promo.json"
 const AGENT_FILE = "./agent.json"
-const USERS_FILE = "./users.json"
-const PHONES_FILE = "./phones.json"
 
 let pendingTickets = []
 let promoActivities = []
 let agentRequests = []
-let users = []
-let phones = {}
 
 // Load JSON data
 try {
@@ -97,23 +83,6 @@ try {
   console.error("Error loading agent requests:", err)
 }
 
-try {
-  if (fsSync.existsSync(USERS_FILE)) {
-    const data = fsSync.readFileSync(USERS_FILE, "utf8")
-    users = JSON.parse(data)
-  }
-} catch (err) {
-  console.error("Error loading users from JSON:", err)
-}
-
-try {
-  if (fsSync.existsSync(PHONES_FILE)) {
-    phones = JSON.parse(fsSync.readFileSync(PHONES_FILE, "utf8"))
-  }
-} catch (err) {
-  console.error("Error loading phones:", err)
-}
-
 // ================= SAVE FUNCTIONS FOR JSON FILES =================
 function saveTickets() {
   fsSync.writeFileSync(TICKETS_FILE, JSON.stringify(pendingTickets, null, 2))
@@ -125,14 +94,6 @@ function savePromo() {
 
 function saveAgentRequests() {
   fsSync.writeFileSync(AGENT_FILE, JSON.stringify(agentRequests, null, 2))
-}
-
-function saveUsers() {
-  fsSync.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2))
-}
-
-function savePhones() {
-  fsSync.writeFileSync(PHONES_FILE, JSON.stringify(phones, null, 2))
 }
 
 // ================= SESSIONS =================
@@ -156,74 +117,39 @@ function clearSession(userId) {
   delete sessions[userId]
 }
 
-// ================= USER DATA FUNCTIONS (MongoDB + JSON fallback) =================
+// ================= USER DATA FUNCTIONS (MongoDB only) =================
 async function findUser(userId) {
-  if (isMongoConnected && User) {
-    return await User.findOne({ userId })
-  } else {
-    return users.find(u => u.userId === userId)
-  }
+  return await User.findOne({ userId })
 }
 
 async function updateUser(userId, updates) {
-  if (isMongoConnected && User) {
-    await User.findOneAndUpdate(
-      { userId },
-      { $set: updates, $setOnInsert: { createdAt: new Date() } },
-      { upsert: true, new: true }
-    )
-  } else {
-    let user = users.find(u => u.userId === userId)
-    if (!user) {
-      user = { userId, createdAt: new Date().toISOString() }
-      users.push(user)
-    }
-    Object.assign(user, updates)
-    saveUsers()
-  }
+  await User.findOneAndUpdate(
+    { userId },
+    { $set: updates, $setOnInsert: { createdAt: new Date() } },
+    { upsert: true, new: true }
+  )
 }
 
 async function getPhone(userId) {
-  if (isMongoConnected && User) {
-    const user = await User.findOne({ userId })
-    return user ? user.phone : null
-  } else {
-    return phones[userId] || null
-  }
+  const user = await User.findOne({ userId })
+  return user ? user.phone : null
 }
 
 async function setPhone(userId, phone) {
-  if (isMongoConnected && User) {
-    await User.findOneAndUpdate({ userId }, { phone }, { upsert: true })
-  } else {
-    phones[userId] = phone
-    savePhones()
-  }
+  await User.findOneAndUpdate({ userId }, { phone }, { upsert: true })
 }
 
 async function getUsersByFlag(flag, value = true) {
-  if (isMongoConnected && User) {
-    return await User.find({ [flag]: value }).sort({ createdAt: -1 }).limit(10)
-  } else {
-    return users.filter(u => u[flag] === value).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 10)
-  }
+  return await User.find({ [flag]: value }).sort({ createdAt: -1 }).limit(10)
 }
 
 async function countUsersByFlag(flag, value = true) {
-  if (isMongoConnected && User) {
-    return await User.countDocuments({ [flag]: value })
-  } else {
-    return users.filter(u => u[flag] === value).length
-  }
+  return await User.countDocuments({ [flag]: value })
 }
 
 async function getAllUserIds() {
-  if (isMongoConnected && User) {
-    const users = await User.find({}, 'userId')
-    return users.map(u => u.userId)
-  } else {
-    return users.map(u => u.userId)
-  }
+  const users = await User.find({}, 'userId')
+  return users.map(u => u.userId)
 }
 
 // ================= CHECK PHONE BEFORE PROCEEDING (skip for admins) =================
@@ -622,6 +548,7 @@ async function handleAgentResponse(ctx, country, response) {
       status: 'pending'
     })
 
+    // Notify admins
     const adminMessage =
       `<b>🧑‍💼 Agent ${isInterested ? 'Interest' : 'Rejection'} - ${countryName}</b>\n\n` +
       `<b>User:</b> ${ctx.from.first_name}\n` +
@@ -984,12 +911,8 @@ bot.on("text", async (ctx) => {
         targetUserIds = await getAllUserIds()
       } else {
         const flag = category === 'players' ? 'isPlayer' : (category === 'affiliates' ? 'isAffiliate' : 'isAgent')
-        if (isMongoConnected && User) {
-          const all = await User.find({ [flag]: true }, 'userId')
-          targetUserIds = all.map(u => u.userId)
-        } else {
-          targetUserIds = users.filter(u => u[flag]).map(u => u.userId)
-        }
+        const users = await User.find({ [flag]: true }, 'userId')
+        targetUserIds = users.map(u => u.userId)
       }
 
       const total = targetUserIds.length
@@ -1151,7 +1074,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
               x="50%" 
               y="85%" 
               text-anchor="middle" 
-              font-family="Impact, 'Bebas Neue', 'Anton', 'Oswald', Arial Black, Arial, sans-serif"
+              font-family="Azo Sans Uber, 'Arial Black', Impact, sans-serif"
               font-size="${fontSize}" 
               font-weight="900"
               fill="#ff00a2" 
@@ -1249,7 +1172,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
     console.error('Promo delivery error:', error)
     try { await ctx.reply(`⚠️ ${loadLanguage('en').error_processing_banners}`) } catch {}
   }
-}
+})
 
 // ================= FILE HANDLER =================
 bot.on(["photo", "video"], async (ctx) => {
@@ -2056,4 +1979,4 @@ process.on('uncaughtException', (error) => {
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with All Features & Existing MongoDB Data Integrated")
+console.log("🚀 Bot Running with All Features & MongoDB Connected")

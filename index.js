@@ -1142,19 +1142,20 @@ async function deliverPromoMaterials(ctx, session, userId) {
         const fontSize = Math.max(54, Math.min(width * 0.091, 115))
 
         const textSvg = `
-          <svg width="${width}" height="${height}">
-            <text 
-              x="50%" 
-              y="94.5%" 
-              text-anchor="middle" 
-              font-family="Impact, 'Bebas Neue', 'Anton', 'Oswald', Arial Black, Arial, sans-serif"
-              font-size="${fontSize}" 
-              font-weight="900"
-              fill="white" 
-              letter-spacing="2px"
-              text-transform="uppercase"
-            >${promoCode}</text>
-          </svg>
+  <svg width="${width}" height="${height}">
+    <text 
+      x="50%"          // change this to your exact horizontal position (e.g., "30%")
+      y="85%"          // change this to your exact vertical position
+      text-anchor="middle" 
+      font-family="Arzo, 'Arial Black', Impact, sans-serif"
+      font-size="${fontSize}" 
+      font-weight="900"
+      fill="#ff00a2" 
+      letter-spacing="2px"
+      text-transform="uppercase"
+    >${promoCode}</text>
+  </svg>
+`
         `
 
         await image

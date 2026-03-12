@@ -60,7 +60,7 @@ const AGENT_FILE = "./agent.json"
 const PHONES_FILE = "./phones.json"   // for non-MongoDB phone storage
 
 let pendingTickets = []
-let allUsers = new Set()           // for broadcast
+let allUsers = new Set()           // for broadcast and user list
 let promoActivities = []
 let agentRequests = []
 let phones = {}                    // userId -> phone (non-MongoDB)
@@ -613,7 +613,7 @@ function adminMenu() {
     ["📥 Deposit Problems", "📤 Withdrawal Problems"],
     ["🤝 Agent Requests", "📢 Broadcast"],
     ["📊 Promo Activity", "🎨 Generate Promo"],
-    ["🔙 Main Menu"]
+    ["👥 User List", "🔙 Main Menu"]      // 👈 New button added
   ]).resize()
 }
 
@@ -901,7 +901,7 @@ bot.action(/promo_lang_(.+)/, async (ctx) => {
 })
 
 // ================= ADMIN MENU HANDLERS (ROBUST) =================
-bot.hears(/^(.*Deposit Problems.*|.*Withdrawal Problems.*|.*Agent Requests.*|.*Broadcast.*|.*Promo Activity.*|.*Generate Promo.*)$/, async (ctx) => {
+bot.hears(/^(.*Deposit Problems.*|.*Withdrawal Problems.*|.*Agent Requests.*|.*Broadcast.*|.*Promo Activity.*|.*Generate Promo.*|.*User List.*)$/, async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
   // Admins don't need phone check
   try {
@@ -940,6 +940,18 @@ bot.hears(/^(.*Deposit Problems.*|.*Withdrawal Problems.*|.*Agent Requests.*|.*B
       ctx.reply(msg, { parse_mode: "Markdown" })
     } else if (text.includes("Generate Promo")) {
       startPromoLanguageSelection(ctx)
+    } else if (text.includes("User List")) {    // 👈 New handler
+      const total = allUsers.size
+      let msg = `👥 **Total Users:** ${total}\n\n`
+      if (total > 0) {
+        msg += "**Recent User IDs:**\n"
+        const recent = [...allUsers].slice(-10).reverse()
+        recent.forEach((id, i) => {
+          msg += `${i+1}. \`${id}\`\n`
+        })
+        msg += "\n_(Enable MongoDB to show usernames)_"
+      }
+      ctx.reply(msg, { parse_mode: "Markdown" })
     }
   } catch (err) {
     console.error("Error in admin menu handler:", err)
@@ -1894,4 +1906,4 @@ process.on('uncaughtException', (error) => {
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with One-Time Phone Requirement & All Features Fixed")
+console.log("🚀 Bot Running with User List & All Features Fixed")

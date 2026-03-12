@@ -4,40 +4,49 @@ const fsSync = require("fs")
 const path = require("path")
 const { Telegraf, Markup } = require("telegraf")
 const sharp = require("sharp")
-const mongoose = require("mongoose")
 
-// ================= MONGODB CONNECTION (REQUIRED) =================
+// ================= OPTIONAL MONGODB =================
+let mongoose
+let User
+let isMongoConnected = false
+
 const MONGODB_URI = process.env.MONGODB_URI
-if (!MONGODB_URI) {
-  console.error("MONGODB_URI is not defined in .env")
-  process.exit(1)
+if (MONGODB_URI) {
+  try {
+    mongoose = require("mongoose")
+    mongoose.connect(MONGODB_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    })
+    .then(() => {
+      console.log("✅ MongoDB connected")
+      isMongoConnected = true
+    })
+    .catch(err => {
+      console.error("❌ MongoDB connection error:", err)
+      console.log("Continuing without MongoDB...")
+    })
+
+    const userSchema = new mongoose.Schema({
+      userId: { type: Number, required: true, unique: true },
+      username: String,
+      firstName: String,
+      lastName: String,
+      phone: String,
+      language: { type: String, default: 'en' },
+      isPlayer: { type: Boolean, default: false },
+      isAffiliate: { type: Boolean, default: false },
+      isAgent: { type: Boolean, default: false },
+      createdAt: { type: Date, default: Date.now }
+    })
+    User = mongoose.model('User', userSchema)
+  } catch (err) {
+    console.error("Failed to initialize MongoDB:", err)
+    console.log("Continuing without MongoDB...")
+  }
+} else {
+  console.log("MONGODB_URI not set, running with JSON storage only")
 }
-
-mongoose.connect(MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-.then(() => console.log("✅ MongoDB connected"))
-.catch(err => {
-  console.error("❌ MongoDB connection error:", err)
-  process.exit(1)
-})
-
-// ================= USER SCHEMA & MODEL =================
-const userSchema = new mongoose.Schema({
-  userId: { type: Number, required: true, unique: true },
-  username: String,
-  firstName: String,
-  lastName: String,
-  phone: String,
-  language: { type: String, default: 'en' },
-  isPlayer: { type: Boolean, default: false },
-  isAffiliate: { type: Boolean, default: false },
-  isAgent: { type: Boolean, default: false },
-  createdAt: { type: Date, default: Date.now }
-})
-
-const User = mongoose.model('User', userSchema)
 
 // ================= BOT INIT =================
 const bot = new Telegraf(process.env.BOT_TOKEN)
@@ -46,14 +55,18 @@ const ADMIN_IDS = process.env.ADMIN_IDS
   ? process.env.ADMIN_IDS.split(",").map(id => parseInt(id.trim()))
   : []
 
-// ================= PERSISTENT STORAGE (JSON for non-user data) =================
+// ================= PERSISTENT STORAGE (JSON) =================
 const TICKETS_FILE = "./tickets.json"
 const PROMO_FILE = "./promo.json"
 const AGENT_FILE = "./agent.json"
+const USERS_FILE = "./users.json"      // for non-MongoDB user storage
+const PHONES_FILE = "./phones.json"    // for non-MongoDB phone storage
 
 let pendingTickets = []
 let promoActivities = []
 let agentRequests = []
+let users = []                         // array of user objects for JSON mode
+let phones = {}                         // userId -> phone
 
 // Load JSON data
 try {
@@ -83,6 +96,23 @@ try {
   console.error("Error loading agent requests:", err)
 }
 
+try {
+  if (fsSync.existsSync(USERS_FILE)) {
+    const data = fsSync.readFileSync(USERS_FILE, "utf8")
+    users = JSON.parse(data)
+  }
+} catch (err) {
+  console.error("Error loading users from JSON:", err)
+}
+
+try {
+  if (fsSync.existsSync(PHONES_FILE)) {
+    phones = JSON.parse(fsSync.readFileSync(PHONES_FILE, "utf8"))
+  }
+} catch (err) {
+  console.error("Error loading phones:", err)
+}
+
 // ================= SAVE FUNCTIONS FOR JSON FILES =================
 function saveTickets() {
   fsSync.writeFileSync(TICKETS_FILE, JSON.stringify(pendingTickets, null, 2))
@@ -94,6 +124,14 @@ function savePromo() {
 
 function saveAgentRequests() {
   fsSync.writeFileSync(AGENT_FILE, JSON.stringify(agentRequests, null, 2))
+}
+
+function saveUsers() {
+  fsSync.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2))
+}
+
+function savePhones() {
+  fsSync.writeFileSync(PHONES_FILE, JSON.stringify(phones, null, 2))
 }
 
 // ================= SESSIONS =================
@@ -117,27 +155,73 @@ function clearSession(userId) {
   delete sessions[userId]
 }
 
-// ================= RECORD USER (MongoDB only) =================
-async function recordUser(ctx, phone = null, flags = {}) {
-  const userId = ctx.from.id
-  const username = ctx.from.username
-  const firstName = ctx.from.first_name
-  const lastName = ctx.from.last_name
+// ================= USER DATA FUNCTIONS (MongoDB + JSON fallback) =================
+async function findUser(userId) {
+  if (isMongoConnected && User) {
+    return await User.findOne({ userId })
+  } else {
+    return users.find(u => u.userId === userId)
+  }
+}
 
-  try {
-    const update = { userId, username, firstName, lastName }
-    if (phone) update.phone = phone
-    if (flags.isPlayer !== undefined) update.isPlayer = flags.isPlayer
-    if (flags.isAffiliate !== undefined) update.isAffiliate = flags.isAffiliate
-    if (flags.isAgent !== undefined) update.isAgent = flags.isAgent
-
+async function updateUser(userId, updates) {
+  if (isMongoConnected && User) {
     await User.findOneAndUpdate(
       { userId },
-      { $set: update, $setOnInsert: { createdAt: new Date() } },
+      { $set: updates, $setOnInsert: { createdAt: new Date() } },
       { upsert: true, new: true }
     )
-  } catch (err) {
-    console.error("Error saving user to MongoDB:", err)
+  } else {
+    let user = users.find(u => u.userId === userId)
+    if (!user) {
+      user = { userId, createdAt: new Date().toISOString() }
+      users.push(user)
+    }
+    Object.assign(user, updates)
+    saveUsers()
+  }
+}
+
+async function getPhone(userId) {
+  if (isMongoConnected && User) {
+    const user = await User.findOne({ userId })
+    return user ? user.phone : null
+  } else {
+    return phones[userId] || null
+  }
+}
+
+async function setPhone(userId, phone) {
+  if (isMongoConnected && User) {
+    await User.findOneAndUpdate({ userId }, { phone }, { upsert: true })
+  } else {
+    phones[userId] = phone
+    savePhones()
+  }
+}
+
+async function getUsersByFlag(flag, value = true) {
+  if (isMongoConnected && User) {
+    return await User.find({ [flag]: value }).sort({ createdAt: -1 }).limit(10)
+  } else {
+    return users.filter(u => u[flag] === value).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 10)
+  }
+}
+
+async function countUsersByFlag(flag, value = true) {
+  if (isMongoConnected && User) {
+    return await User.countDocuments({ [flag]: value })
+  } else {
+    return users.filter(u => u[flag] === value).length
+  }
+}
+
+async function getAllUserIds() {
+  if (isMongoConnected && User) {
+    const users = await User.find({}, 'userId')
+    return users.map(u => u.userId)
+  } else {
+    return users.map(u => u.userId)
   }
 }
 
@@ -146,8 +230,8 @@ async function ensurePhone(ctx) {
   const userId = ctx.from.id
   if (ADMIN_IDS.includes(userId)) return true
 
-  const user = await User.findOne({ userId })
-  if (user && user.phone) return true
+  const phone = await getPhone(userId)
+  if (phone) return true
 
   await ctx.reply(
     "Please share your phone number to continue:",
@@ -449,7 +533,7 @@ async function handleAgentResponse(ctx, country, response) {
 
     // Mark user as agent if interested
     if (isInterested) {
-      await recordUser(ctx, null, { isAgent: true })
+      await updateUser(userId, { isAgent: true })
     }
 
     await saveSubmission({
@@ -541,7 +625,7 @@ function adminMenu() {
     ["📥 Deposit Problems", "📤 Withdrawal Problems"],
     ["🤝 Agent Requests", "📢 Broadcast"],
     ["📊 Promo Activity", "🎨 Generate Promo"],
-    ["👥 Players", "👥 Affiliates", "👥 Agents"],   // New category buttons
+    ["👥 Players", "👥 Affiliates", "👥 Agents"],
     ["🔙 Main Menu"]
   ]).resize()
 }
@@ -554,9 +638,14 @@ bot.start(async (ctx) => {
       return ctx.reply("Welcome Admin! Use the menu below to manage tickets.", adminMenu())
     }
 
-    const user = await User.findOne({ userId })
-    if (user && user.phone) {
-      await recordUser(ctx) // update username etc.
+    const phone = await getPhone(userId)
+    if (phone) {
+      // update user info
+      await updateUser(userId, {
+        username: ctx.from.username,
+        firstName: ctx.from.first_name,
+        lastName: ctx.from.last_name
+      })
       return ctx.reply("Welcome back to Support Bot!", userMenu())
     }
 
@@ -577,7 +666,12 @@ bot.on("contact", async (ctx) => {
     const userId = ctx.from.id
     const phone = ctx.message.contact.phone_number
 
-    await recordUser(ctx, phone)
+    await setPhone(userId, phone)
+    await updateUser(userId, {
+      username: ctx.from.username,
+      firstName: ctx.from.first_name,
+      lastName: ctx.from.last_name
+    })
 
     if (ADMIN_IDS.includes(userId)) {
       ctx.reply("Thank you! Use the menu below.", adminMenu())
@@ -606,7 +700,7 @@ bot.hears("🔙 Main Menu", async (ctx) => {
 bot.hears("Player Support", async (ctx) => {
   if (!(await ensurePhone(ctx))) return
   try {
-    await recordUser(ctx, null, { isPlayer: true }) // mark as player
+    await updateUser(ctx.from.id, { isPlayer: true })
     const userId = ctx.from.id
     clearSession(userId)
 
@@ -632,7 +726,7 @@ bot.hears("Player Support", async (ctx) => {
 bot.hears("Affiliate Support", async (ctx) => {
   if (!(await ensurePhone(ctx))) return
   try {
-    await recordUser(ctx, null, { isAffiliate: true }) // mark as affiliate
+    await updateUser(ctx.from.id, { isAffiliate: true })
     const userId = ctx.from.id
     clearSession(userId)
 
@@ -660,7 +754,6 @@ bot.hears("Affiliate Support", async (ctx) => {
 bot.hears("Become Agent", async (ctx) => {
   if (!(await ensurePhone(ctx))) return
   try {
-    // Note: user becomes agent only after accepting terms (in handleAgentResponse)
     const userId = ctx.from.id
     clearSession(userId)
     await agentFlow(ctx)
@@ -777,7 +870,7 @@ bot.action(/agent_(accept|reject)_(.+)/, async (ctx) => {
 bot.action("affiliate_promo_banner", async (ctx) => {
   if (!(await ensurePhone(ctx))) return
   try {
-    await recordUser(ctx, null, { isAffiliate: true }) // ensure affiliate flag
+    await updateUser(ctx.from.id, { isAffiliate: true })
     await startPromoLanguageSelection(ctx)
     await ctx.answerCbQuery().catch(() => {})
   } catch (err) {
@@ -820,49 +913,44 @@ bot.action(/promo_lang_(.+)/, async (ctx) => {
 })
 
 // ================= CATEGORY USER LIST HANDLERS =================
-async function showUserList(ctx, category) {
+async function showUserList(ctx, flag, displayName) {
   try {
-    let query = {}
-    if (category === 'players') query = { isPlayer: true }
-    else if (category === 'affiliates') query = { isAffiliate: true }
-    else if (category === 'agents') query = { isAgent: true }
+    const usersList = await getUsersByFlag(flag)
+    const total = await countUsersByFlag(flag)
 
-    const users = await User.find(query).sort({ createdAt: -1 }).limit(10)
-    const total = await User.countDocuments(query)
-
-    let msg = `👥 **${category.charAt(0).toUpperCase() + category.slice(1)}** (Total: ${total})\n\n`
-    if (users.length === 0) {
+    let msg = `👥 **${displayName}** (Total: ${total})\n\n`
+    if (usersList.length === 0) {
       msg += "No users in this category."
     } else {
-      users.forEach((u, i) => {
+      usersList.forEach((u, i) => {
         const name = u.username ? `@${u.username}` : `ID: ${u.userId}`
         msg += `${i+1}. ${name}\n`
       })
     }
     ctx.reply(msg, { parse_mode: "Markdown" })
   } catch (err) {
-    console.error(`Error in showUserList for ${category}:`, err)
+    console.error(`Error in showUserList for ${displayName}:`, err)
     ctx.reply("Error fetching user list.")
   }
 }
 
 bot.hears("👥 Players", async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
-  await showUserList(ctx, 'players')
+  await showUserList(ctx, 'isPlayer', 'Players')
 })
 
 bot.hears("👥 Affiliates", async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
-  await showUserList(ctx, 'affiliates')
+  await showUserList(ctx, 'isAffiliate', 'Affiliates')
 })
 
 bot.hears("👥 Agents", async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
-  await showUserList(ctx, 'agents')
+  await showUserList(ctx, 'isAgent', 'Agents')
 })
 
 // ================= BROADCAST WITH CATEGORY =================
-let broadcastCategory = null // store temporarily in session
+let broadcastCategory = null // stored in session
 
 bot.hears("📢 Broadcast", async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
@@ -895,27 +983,33 @@ bot.on("text", async (ctx) => {
   try {
     const session = getSession(ctx.from.id)
     const userId = ctx.from.id
-    // We don't record user here to avoid infinite loops; only record when needed (handled in specific flows)
 
     // ADMIN BROADCAST MESSAGE
     if (ADMIN_IDS.includes(userId) && session.state === "admin_broadcast_message") {
       const message = ctx.message.text
-      const category = session.broadcastCategory // 'all', 'players', 'affiliates', 'agents'
-      let query = {}
-      if (category === 'players') query = { isPlayer: true }
-      else if (category === 'affiliates') query = { isAffiliate: true }
-      else if (category === 'agents') query = { isAgent: true }
-      // 'all' means no filter
+      const category = session.broadcastCategory
 
-      const users = await User.find(query, 'userId')
-      const userIds = users.map(u => u.userId)
-      const total = userIds.length
+      let targetUserIds = []
+      if (category === 'all') {
+        targetUserIds = await getAllUserIds()
+      } else {
+        const flag = category === 'players' ? 'isPlayer' : (category === 'affiliates' ? 'isAffiliate' : 'isAgent')
+        const users = await getUsersByFlag(flag, true) // but we need all, not just last 10
+        // For broadcast we need all users, not limited. We'll re-fetch.
+        if (isMongoConnected && User) {
+          const all = await User.find({ [flag]: true }, 'userId')
+          targetUserIds = all.map(u => u.userId)
+        } else {
+          targetUserIds = users.filter(u => u[flag]).map(u => u.userId)
+        }
+      }
 
+      const total = targetUserIds.length
       ctx.reply(`Broadcasting to ${total} users in category "${category}"...`)
 
       let successCount = 0
       let failCount = 0
-      const promises = userIds.map(uid =>
+      const promises = targetUserIds.map(uid =>
         bot.telegram.sendMessage(uid, `📢 Broadcast from admin (${category}):\n\n${message}`)
           .then(() => successCount++)
           .catch(() => failCount++)
@@ -1124,7 +1218,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
     savePromo()
 
     // Mark user as affiliate
-    await recordUser(ctx, null, { isAffiliate: true })
+    await updateUser(userId, { isAffiliate: true })
 
     const adminMsg = `🎨 Promo Banner Request Complete\n\n` +
       `Name: ${userData.name}\n` +
@@ -1659,7 +1753,7 @@ bot.action("submit_player", async (ctx) => {
     saveTickets()
 
     // Mark user as player
-    await recordUser(ctx, null, { isPlayer: true })
+    await updateUser(userId, { isPlayer: true })
 
     const message = `🎫 Player Request\nTrack ID: ${trackId}
 
@@ -1845,4 +1939,4 @@ process.on('uncaughtException', (error) => {
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with Category-Based User Lists & Broadcast")
+console.log("🚀 Bot Running with MongoDB optional & Category Features")

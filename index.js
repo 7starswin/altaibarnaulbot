@@ -625,8 +625,7 @@ function adminMenu() {
     ["📥 Deposit Problems", "📤 Withdrawal Problems"],
     ["🤝 Agent Requests", "📢 Broadcast"],
     ["📊 Promo Activity", "🎨 Generate Promo"],
-    ["👥 Players", "👥 Affiliates", "👥 Agents"],
-    ["🔙 Main Menu"]
+    ["👥 Users", "🔙 Main Menu"]
   ]).resize()
 }
 
@@ -640,7 +639,6 @@ bot.start(async (ctx) => {
 
     const phone = await getPhone(userId)
     if (phone) {
-      // update user info
       await updateUser(userId, {
         username: ctx.from.username,
         firstName: ctx.from.first_name,
@@ -912,7 +910,25 @@ bot.action(/promo_lang_(.+)/, async (ctx) => {
   }
 })
 
-// ================= CATEGORY USER LIST HANDLERS =================
+// ================= ADMIN USERS SUBMENU =================
+bot.hears("👥 Users", async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  try {
+    await ctx.reply(
+      "Select user category:",
+      Markup.inlineKeyboard([
+        [Markup.button.callback("👥 Players", "show_players")],
+        [Markup.button.callback("👥 Affiliates", "show_affiliates")],
+        [Markup.button.callback("👥 Agents", "show_agents")],
+        [Markup.button.callback("🔙 Back to Admin Menu", "main_menu")]
+      ])
+    )
+  } catch (err) {
+    console.error("Error in Users hears:", err)
+  }
+})
+
+// ================= USER LIST CALLBACKS =================
 async function showUserList(ctx, flag, displayName) {
   try {
     const usersList = await getUsersByFlag(flag)
@@ -927,31 +943,30 @@ async function showUserList(ctx, flag, displayName) {
         msg += `${i+1}. ${name}\n`
       })
     }
-    ctx.reply(msg, { parse_mode: "Markdown" })
+    await ctx.editMessageText(msg, { parse_mode: "Markdown" })
+    await ctx.answerCbQuery().catch(() => {})
   } catch (err) {
     console.error(`Error in showUserList for ${displayName}:`, err)
-    ctx.reply("Error fetching user list.")
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
   }
 }
 
-bot.hears("👥 Players", async (ctx) => {
+bot.action("show_players", async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
   await showUserList(ctx, 'isPlayer', 'Players')
 })
 
-bot.hears("👥 Affiliates", async (ctx) => {
+bot.action("show_affiliates", async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
   await showUserList(ctx, 'isAffiliate', 'Affiliates')
 })
 
-bot.hears("👥 Agents", async (ctx) => {
+bot.action("show_agents", async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
   await showUserList(ctx, 'isAgent', 'Agents')
 })
 
 // ================= BROADCAST WITH CATEGORY =================
-let broadcastCategory = null // stored in session
-
 bot.hears("📢 Broadcast", async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
   const session = getSession(ctx.from.id)
@@ -978,6 +993,45 @@ bot.action(/broadcast_(.+)/, async (ctx) => {
   await ctx.answerCbQuery().catch(() => {})
 })
 
+// ================= ADMIN MENU REGEX HANDLER (remaining buttons) =================
+bot.hears(/^(.*Deposit Problems.*|.*Withdrawal Problems.*|.*Agent Requests.*|.*Promo Activity.*)$/, async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  try {
+    const text = ctx.message.text
+
+    if (text.includes("Deposit Problems")) {
+      showTicketList(ctx, "deposit", 0)
+    } else if (text.includes("Withdrawal Problems")) {
+      showTicketList(ctx, "withdrawal", 0)
+    } else if (text.includes("Agent Requests")) {
+      if (agentRequests.length === 0) {
+        return ctx.reply("No agent requests yet.")
+      }
+      let msg = "🤝 **Agent Requests**\n\n"
+      const recent = [...agentRequests].reverse().slice(0, 10)
+      recent.forEach((req, i) => {
+        const user = req.username ? `@${req.username}` : `ID: ${req.userId}`
+        const status = req.interested ? "✅ Accepted" : "❌ Rejected"
+        msg += `${i+1}. ${user} | ${req.country} | ${status} | ${new Date(req.timestamp).toLocaleString()}\n`
+      })
+      ctx.reply(msg, { parse_mode: "Markdown" })
+    } else if (text.includes("Promo Activity")) {
+      if (promoActivities.length === 0) {
+        return ctx.reply("No promo activity yet.")
+      }
+      let msg = "📊 **Promo Banner Requests**\n\n"
+      const recent = [...promoActivities].reverse().slice(0, 10)
+      recent.forEach((p, i) => {
+        const user = p.username ? `@${p.username}` : `ID: ${p.userId}`
+        msg += `${i+1}. ${user} | Code: **${p.promoCode}** | Lang: ${p.language} | ${new Date(p.timestamp).toLocaleString()}\n`
+      })
+      ctx.reply(msg, { parse_mode: "Markdown" })
+    }
+  } catch (err) {
+    console.error("Error in admin menu regex handler:", err)
+  }
+})
+
 // ================= TEXT HANDLER =================
 bot.on("text", async (ctx) => {
   try {
@@ -994,8 +1048,6 @@ bot.on("text", async (ctx) => {
         targetUserIds = await getAllUserIds()
       } else {
         const flag = category === 'players' ? 'isPlayer' : (category === 'affiliates' ? 'isAffiliate' : 'isAgent')
-        const users = await getUsersByFlag(flag, true) // but we need all, not just last 10
-        // For broadcast we need all users, not limited. We'll re-fetch.
         if (isMongoConnected && User) {
           const all = await User.find({ [flag]: true }, 'userId')
           targetUserIds = all.map(u => u.userId)
@@ -1939,4 +1991,4 @@ process.on('uncaughtException', (error) => {
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with MongoDB optional & Category Features")
+console.log("🚀 Bot Running with Users Submenu & All Features")

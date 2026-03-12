@@ -393,8 +393,6 @@ bot.action(/promo_cat_(.+)/, async (ctx) => {
 
     session.data.promoCategory = category
     session.state = "waiting_promo_code"
-
-    // === ADDED LOG ===
     console.log("   State set to waiting_promo_code for user", userId)
 
     await ctx.editMessageText(
@@ -913,72 +911,6 @@ bot.hears("🎨 Generate Promo", async (ctx) => {
     await startPromoLanguageSelection(ctx)
   } catch (err) {
     console.error("Error in Generate Promo hears:", err)
-  }
-})
-
-// ================= ROBUST ADMIN MENU HANDLER =================
-bot.hears(/.*/, async (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-
-  const text = ctx.message.text
-  console.log("Admin message received:", text)
-
-  try {
-    if (text.includes("Deposit Problems")) {
-      showTicketList(ctx, "deposit", 0)
-    } else if (text.includes("Withdrawal Problems")) {
-      showTicketList(ctx, "withdrawal", 0)
-    } else if (text.includes("Agent Requests")) {
-      if (agentRequests.length === 0) {
-        return ctx.reply("No agent requests yet.")
-      }
-      let msg = "🤝 **Agent Requests**\n\n"
-      const recent = [...agentRequests].reverse().slice(0, 10)
-      recent.forEach((req, i) => {
-        const user = req.username ? `@${req.username}` : `ID: ${req.userId}`
-        const status = req.interested ? "✅ Accepted" : "❌ Rejected"
-        msg += `${i+1}. ${user} | ${req.country} | ${status} | ${new Date(req.timestamp).toLocaleString()}\n`
-      })
-      ctx.reply(msg, { parse_mode: "Markdown" })
-    } else if (text.includes("Broadcast")) {
-      const session = getSession(ctx.from.id)
-      session.state = "admin_broadcast_category"
-      await ctx.reply(
-        "Select broadcast target:",
-        Markup.inlineKeyboard([
-          [Markup.button.callback("All Users", "broadcast_all")],
-          [Markup.button.callback("Players", "broadcast_players")],
-          [Markup.button.callback("Affiliates", "broadcast_affiliates")],
-          [Markup.button.callback("Agents", "broadcast_agents")],
-          [Markup.button.callback("Cancel", "main_menu")]
-        ])
-      )
-    } else if (text.includes("Promo Activity")) {
-      if (promoActivities.length === 0) {
-        return ctx.reply("No promo activity yet.")
-      }
-      let msg = "📊 **Promo Banner Requests**\n\n"
-      const recent = [...promoActivities].reverse().slice(0, 10)
-      recent.forEach((p, i) => {
-        const user = p.username ? `@${p.username}` : `ID: ${p.userId}`
-        msg += `${i+1}. ${user} | Code: **${p.promoCode}** | Lang: ${p.language} | Cat: ${p.category} | ${new Date(p.timestamp).toLocaleString()}\n`
-      })
-      ctx.reply(msg, { parse_mode: "Markdown" })
-    } else if (text.includes("Generate Promo")) {
-      await startPromoLanguageSelection(ctx)
-    } else if (text.includes("Users")) {
-      await ctx.reply(
-        "Select user category:",
-        Markup.inlineKeyboard([
-          [Markup.button.callback("👥 Players", "show_players")],
-          [Markup.button.callback("👥 Affiliates", "show_affiliates")],
-          [Markup.button.callback("👥 Agents", "show_agents")],
-          [Markup.button.callback("🔙 Back to Admin Menu", "main_menu")]
-        ])
-      )
-    }
-  } catch (err) {
-    console.error("Error in admin menu handler:", err)
   }
 })
 
@@ -1957,21 +1889,22 @@ Transaction ID: ${safe(session.data.trxId)}`
   }
 })
 
-// ================= TEXT HANDLER (UPDATED WITH STATE LOG) =================
+// ================= TEXT HANDLER (UPDATED WITH ADMIN MENU LOGIC) =================
 bot.on("text", async (ctx) => {
   console.log("📝 text received from", ctx.from.id, ":", ctx.message.text)
   try {
     const session = getSession(ctx.from.id)
     const userId = ctx.from.id
+    const text = ctx.message.text
 
-    // === NEW: Log current session state for debugging ===
+    // === LOG SESSION STATE FOR ADMINS ===
     if (ADMIN_IDS.includes(userId)) {
       console.log("   Admin session state:", session.state)
     }
 
-    // ADMIN BROADCAST MESSAGE
+    // ===== 1. HANDLE ADMIN BROADCAST MESSAGE =====
     if (ADMIN_IDS.includes(userId) && session.state === "admin_broadcast_message") {
-      const message = ctx.message.text
+      const message = text
       const category = session.broadcastCategory
 
       let targetUserIds = []
@@ -2002,13 +1935,143 @@ bot.on("text", async (ctx) => {
       return
     }
 
-    // USER REPLY TO ADMIN
+    // ===== 2. HANDLE ADMIN REPLY =====
+    if (ADMIN_IDS.includes(userId) && session.state === "admin_reply") {
+      const targetUserId = session.data.targetUserId
+      if (!targetUserId) {
+        ctx.reply("❌ Error: No user to reply to. Please click 'Reply' again.")
+        clearSession(userId)
+        return
+      }
+      bot.telegram.sendMessage(targetUserId, `✉️ Admin reply:\n\n${text}`)
+        .then(() => {
+          ctx.reply("✅ Your reply has been sent to the user.")
+          userLastAdmin[targetUserId] = userId
+        })
+        .catch(() => {
+          ctx.reply("❌ Failed to send message. The user might have blocked the bot.")
+        })
+      clearSession(userId)
+      return
+    }
+
+    // ===== 3. HANDLE PROMO CODE WAITING =====
+    if (session.state === "waiting_promo_code") {
+      console.log("📝 Promo code received:", text)
+      const promoCode = text.trim()
+      if (promoCode.length > 10) {
+        ctx.reply("⚠️ Promo code must be max 10 characters. Please try again.")
+        return
+      }
+      session.data.promoCode = promoCode
+      await deliverPromoMaterials(ctx, session, userId)
+      return
+    }
+
+    // ===== 4. HANDLE SUPPORT FLOW (for both users and admins in support states) =====
+    if (session.state === "waiting_game_user_id") {
+      session.data.gameUserId = text
+      session.state = "waiting_phone_number"
+      ctx.reply("Enter Phone Number (format: +880XXXXXXXXXXX):")
+      return
+    }
+    else if (session.state === "waiting_phone_number") {
+      session.data.phoneNumber = text
+      session.state = "waiting_agent_number"
+      ctx.reply("Enter Agent Number:")
+      return
+    }
+    else if (session.state === "waiting_agent_number") {
+      session.data.agentNumber = text
+      session.state = "waiting_date"
+      showCalendar(ctx, session)
+      return
+    }
+    else if (session.state === "waiting_time") {
+      session.data.selectedTime = text
+      session.state = "waiting_amount"
+      ctx.reply("Enter Amount:")
+      return
+    }
+    else if (session.state === "waiting_amount") {
+      session.data.amount = text
+      session.state = "waiting_trx_id"
+      ctx.reply("Enter Transaction ID (Trx ID):")
+      return
+    }
+    else if (session.state === "waiting_trx_id") {
+      session.data.trxId = text
+      session.state = "waiting_file"
+      ctx.reply("Please upload a screenshot or video file.")
+      return
+    }
+
+    // ===== 5. ADMIN MENU COMMANDS (when no session state) =====
+    if (ADMIN_IDS.includes(userId) && !session.state) {
+      if (text.includes("Deposit Problems")) {
+        showTicketList(ctx, "deposit", 0)
+      } else if (text.includes("Withdrawal Problems")) {
+        showTicketList(ctx, "withdrawal", 0)
+      } else if (text.includes("Agent Requests")) {
+        if (agentRequests.length === 0) {
+          return ctx.reply("No agent requests yet.")
+        }
+        let msg = "🤝 **Agent Requests**\n\n"
+        const recent = [...agentRequests].reverse().slice(0, 10)
+        recent.forEach((req, i) => {
+          const user = req.username ? `@${req.username}` : `ID: ${req.userId}`
+          const status = req.interested ? "✅ Accepted" : "❌ Rejected"
+          msg += `${i+1}. ${user} | ${req.country} | ${status} | ${new Date(req.timestamp).toLocaleString()}\n`
+        })
+        ctx.reply(msg, { parse_mode: "Markdown" })
+      } else if (text.includes("Broadcast")) {
+        const session = getSession(ctx.from.id)
+        session.state = "admin_broadcast_category"
+        await ctx.reply(
+          "Select broadcast target:",
+          Markup.inlineKeyboard([
+            [Markup.button.callback("All Users", "broadcast_all")],
+            [Markup.button.callback("Players", "broadcast_players")],
+            [Markup.button.callback("Affiliates", "broadcast_affiliates")],
+            [Markup.button.callback("Agents", "broadcast_agents")],
+            [Markup.button.callback("Cancel", "main_menu")]
+          ])
+        )
+      } else if (text.includes("Promo Activity")) {
+        if (promoActivities.length === 0) {
+          return ctx.reply("No promo activity yet.")
+        }
+        let msg = "📊 **Promo Banner Requests**\n\n"
+        const recent = [...promoActivities].reverse().slice(0, 10)
+        recent.forEach((p, i) => {
+          const user = p.username ? `@${p.username}` : `ID: ${p.userId}`
+          msg += `${i+1}. ${user} | Code: **${p.promoCode}** | Lang: ${p.language} | Cat: ${p.category} | ${new Date(p.timestamp).toLocaleString()}\n`
+        })
+        ctx.reply(msg, { parse_mode: "Markdown" })
+      } else if (text.includes("Generate Promo")) {
+        await startPromoLanguageSelection(ctx)
+      } else if (text.includes("Users")) {
+        await ctx.reply(
+          "Select user category:",
+          Markup.inlineKeyboard([
+            [Markup.button.callback("👥 Players", "show_players")],
+            [Markup.button.callback("👥 Affiliates", "show_affiliates")],
+            [Markup.button.callback("👥 Agents", "show_agents")],
+            [Markup.button.callback("🔙 Back to Admin Menu", "main_menu")]
+          ])
+        )
+      }
+      // If no admin menu command matched, do nothing (ignore)
+      return
+    }
+
+    // ===== 6. USER REPLY TO ADMIN (non‑admin, no session state) =====
     if (!ADMIN_IDS.includes(userId) && !session.state) {
       const adminId = userLastAdmin[userId]
       if (adminId) {
         bot.telegram.sendMessage(
           adminId,
-          `✉️ Reply from user ${displayUser(ctx)}:\n\n${ctx.message.text}`,
+          `✉️ Reply from user ${displayUser(ctx)}:\n\n${text}`,
           Markup.inlineKeyboard([
             [Markup.button.callback("💬 Reply to user", `reply_${userId}`)]
           ])
@@ -2022,70 +2085,9 @@ bot.on("text", async (ctx) => {
       return
     }
 
-    // ADMIN REPLY
-    if (ADMIN_IDS.includes(userId) && session.state === "admin_reply") {
-      const targetUserId = session.data.targetUserId
-      if (!targetUserId) {
-        ctx.reply("❌ Error: No user to reply to. Please click 'Reply' again.")
-        clearSession(userId)
-        return
-      }
-      bot.telegram.sendMessage(targetUserId, `✉️ Admin reply:\n\n${ctx.message.text}`)
-        .then(() => {
-          ctx.reply("✅ Your reply has been sent to the user.")
-          userLastAdmin[targetUserId] = userId
-        })
-        .catch(() => {
-          ctx.reply("❌ Failed to send message. The user might have blocked the bot.")
-        })
-      clearSession(userId)
-      return
-    }
+    // If we reach here, the message was not handled (should not happen)
+    console.log("⚠️ Unhandled message:", text)
 
-    // PROMO CODE WAITING
-    if (session.state === "waiting_promo_code") {
-      console.log("📝 Promo code received:", ctx.message.text)
-      const promoCode = ctx.message.text.trim()
-      if (promoCode.length > 10) {
-        ctx.reply("⚠️ Promo code must be max 10 characters. Please try again.")
-        return
-      }
-      session.data.promoCode = promoCode
-      await deliverPromoMaterials(ctx, session, userId)
-      return
-    }
-
-    // SUPPORT FLOW
-    if (session.state === "waiting_game_user_id") {
-      session.data.gameUserId = ctx.message.text
-      session.state = "waiting_phone_number"
-      ctx.reply("Enter Phone Number (format: +880XXXXXXXXXXX):")
-    }
-    else if (session.state === "waiting_phone_number") {
-      session.data.phoneNumber = ctx.message.text
-      session.state = "waiting_agent_number"
-      ctx.reply("Enter Agent Number:")
-    }
-    else if (session.state === "waiting_agent_number") {
-      session.data.agentNumber = ctx.message.text
-      session.state = "waiting_date"
-      showCalendar(ctx, session)
-    }
-    else if (session.state === "waiting_time") {
-      session.data.selectedTime = ctx.message.text
-      session.state = "waiting_amount"
-      ctx.reply("Enter Amount:")
-    }
-    else if (session.state === "waiting_amount") {
-      session.data.amount = ctx.message.text
-      session.state = "waiting_trx_id"
-      ctx.reply("Enter Transaction ID (Trx ID):")
-    }
-    else if (session.state === "waiting_trx_id") {
-      session.data.trxId = ctx.message.text
-      session.state = "waiting_file"
-      ctx.reply("Please upload a screenshot or video file.")
-    }
   } catch (err) {
     console.error("Error in text handler:", err)
   }

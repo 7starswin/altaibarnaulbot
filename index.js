@@ -43,7 +43,7 @@ const ADMIN_IDS = process.env.ADMIN_IDS
   ? process.env.ADMIN_IDS.split(",").map(id => parseInt(id.trim()))
   : []
 
-// ================= PERSISTENT STORAGE (JSON) =================
+// ================= PERSISTENT STORAGE (JSON for non-user data) =================
 const TICKETS_FILE = "./tickets.json"
 const PROMO_FILE = "./promo.json"
 const AGENT_FILE = "./agent.json"
@@ -892,7 +892,7 @@ bot.hears(/.*/, async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
 
   const text = ctx.message.text
-  console.log("Admin message received:", text) // for debugging
+  console.log("Admin message received:", text)
 
   try {
     if (text.includes("Deposit Problems")) {

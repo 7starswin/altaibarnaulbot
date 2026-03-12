@@ -166,7 +166,13 @@ async function ensurePhone(ctx) {
   return false
 }
 
-// ================= HELPERS =================
+// ================= HELPER: FORMAT USER =================
+function formatUser(user) {
+  if (user.username) return `@${user.username}`
+  return `ID: ${user.userId}`
+}
+
+// For ctx-based display (when we have the ctx object)
 function displayUser(ctx) {
   if (ctx.from.username) return `@${ctx.from.username}`
   return `ID: ${ctx.from.id} (no username)`
@@ -188,13 +194,11 @@ async function ensureFolder(folderPath) {
   }
 }
 
-// Case‑insensitive image file filter
 async function getImageFiles(folderPath) {
   try {
     const files = await fs.readdir(folderPath)
     return files.filter(f => f.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i))
   } catch (err) {
-    console.error(`Error reading folder ${folderPath}:`, err)
     return []
   }
 }
@@ -986,9 +990,9 @@ function showTicketList(ctx, category, page) {
 
     const buttons = []
     pageTickets.forEach(t => {
-      const username = t.username ? `@${t.username}` : `ID: ${t.userId}`
+      const userDisplay = t.username ? `@${t.username}` : `ID: ${t.userId}`
       buttons.push([Markup.button.callback(
-        `${t.trackId} - ${username}`,
+        `${t.trackId} - ${userDisplay}`,
         `view_${category}_${t.trackId}`
       )])
     })
@@ -1075,7 +1079,7 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
   }
 })
 
-// ================= DELIVER PROMO MATERIALS (DIAGNOSTIC) =================
+// ================= DELIVER PROMO MATERIALS =================
 async function deliverPromoMaterials(ctx, session, userId) {
   console.log("🚀 deliverPromoMaterials started for user", userId)
   try {

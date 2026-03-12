@@ -888,7 +888,6 @@ bot.hears("🎨 Generate Promo", async (ctx) => {
 })
 
 // ================= ROBUST ADMIN MENU HANDLER =================
-// This single handler catches all admin menu buttons by looking for keywords.
 bot.hears(/.*/, async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
 
@@ -1107,7 +1106,7 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
   }
 })
 
-// ================= DELIVER PROMO MATERIALS =================
+// ================= DELIVER PROMO MATERIALS (OPTIMIZED) =================
 async function deliverPromoMaterials(ctx, session, userId) {
   try {
     const { bannerLanguage, promoCategory, promoCode } = session.data
@@ -1118,6 +1117,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
       await ctx.reply(`⚠️ ${texts.invalid_promo_code}`)
       return
     }
+
     const validLangs = ['en', 'bn', 'hi', 'tr', 'th', 'eg']
     const validCats = ['cricket', 'football', 'matchday', 'video']
     if (!validLangs.includes(bannerLanguage) || !validCats.includes(promoCategory)) {
@@ -1125,15 +1125,15 @@ async function deliverPromoMaterials(ctx, session, userId) {
       return
     }
 
-    const folderPath = path.join('./assets', bannerLanguage, promoCategory, 'banners')
-    const tempFolder = path.join('./temp', userId.toString())
+    const folderPath = path.join(__dirname, 'assets', bannerLanguage, promoCategory, 'banners')
+    const tempFolder = path.join(__dirname, 'temp', userId.toString())
 
     await ensureFolder(folderPath)
     await ensureFolder(tempFolder)
 
     const imageFiles = await getFilesInFolder(folderPath)
     if (imageFiles.length === 0) {
-      await ctx.reply(`⚠️ ${texts.no_banners_available.replace('{language}', bannerLanguage.toUpperCase()).replace('{category}', promoCategory)}`)
+      await ctx.reply(`⚠️ No banners found for ${bannerLanguage}/${promoCategory}. Please check your assets.`)
       return
     }
 
@@ -1143,47 +1143,69 @@ async function deliverPromoMaterials(ctx, session, userId) {
     let failedCount = 0
     const processedImages = []
 
-    for (const fileName of imageFiles) {
-      try {
-        const inputPath = path.join(folderPath, fileName)
-        const outputPath = path.join(tempFolder, `${promoCode}_${fileName}`)
+    // Process images concurrently (limit 5 at a time)
+    const concurrencyLimit = 5
+    for (let i = 0; i < imageFiles.length; i += concurrencyLimit) {
+      const chunk = imageFiles.slice(i, i + concurrencyLimit)
+      const promises = chunk.map(async (fileName) => {
+        try {
+          const inputPath = path.join(folderPath, fileName)
+          const outputPath = path.join(tempFolder, `${promoCode}_${fileName}`)
 
-        const image = sharp(inputPath)
-        const { width, height } = await image.metadata()
-        const fontSize = Math.max(54, Math.min(width * 0.091, 115))
+          const image = sharp(inputPath)
+          const { width, height } = await image.metadata()
+          const fontSize = Math.max(54, Math.min(width * 0.091, 115))
 
-        // ===== ADJUST x AND y TO MATCH YOUR BANNER'S PROMO BOX =====
-        const textSvg = `
-          <svg width="${width}" height="${height}">
-            <text 
-              x="50%" 
-              y="85%" 
-              text-anchor="middle" 
-              font-family="Azo Sans Uber, 'Arial Black', Impact, sans-serif"
-              font-size="${fontSize}" 
-              font-weight="900"
-              fill="#ff00a2" 
-              stroke="black"
-              stroke-width="4"
-              paint-order="stroke"
-              letter-spacing="2px"
-              text-transform="uppercase"
-            >${promoCode}</text>
-          </svg>
-        `
+          // ===== ADJUST x AND y TO MATCH YOUR BANNER'S PROMO BOX =====
+          const textSvg = `
+            <svg width="${width}" height="${height}">
+              <text 
+                x="50%" 
+                y="85%" 
+                text-anchor="middle" 
+                font-family="Azo Sans Uber, 'Arial Black', Impact, sans-serif"
+                font-size="${fontSize}" 
+                font-weight="900"
+                fill="#ff00a2" 
+                stroke="black"
+                stroke-width="4"
+                paint-order="stroke"
+                letter-spacing="2px"
+                text-transform="uppercase"
+              >${promoCode}</text>
+            </svg>
+          `
 
-        await image
-          .composite([{ input: Buffer.from(textSvg), top: 0, left: 0 }])
-          .jpeg({ quality: 95 })
-          .toFile(outputPath)
+          await image
+            .composite([{ input: Buffer.from(textSvg), top: 0, left: 0 }])
+            .jpeg({ quality: 95 })
+            .toFile(outputPath)
 
-        processedImages.push(outputPath)
-      } catch (err) {
-        console.error(`Error processing ${fileName}:`, err)
-        failedCount++
+          return outputPath
+        } catch (err) {
+          console.error(`Error processing ${fileName}:`, err)
+          return null
+        }
+      })
+
+      const results = await Promise.all(promises)
+      for (const res of results) {
+        if (res) {
+          processedImages.push(res)
+          sentCount++
+        } else {
+          failedCount++
+        }
       }
     }
 
+    if (processedImages.length === 0) {
+      await ctx.reply("❌ No banners could be generated. Please try again later.")
+      clearSession(userId)
+      return
+    }
+
+    // Send images in groups of up to 10
     const groupSize = 10
     for (let i = 0; i < processedImages.length; i += groupSize) {
       const group = processedImages.slice(i, i + groupSize)
@@ -1193,14 +1215,13 @@ async function deliverPromoMaterials(ctx, session, userId) {
       }))
       try {
         await ctx.replyWithMediaGroup(mediaGroup)
-        sentCount += group.length
         await delay(1000)
       } catch (err) {
         console.error('Error sending media group:', err)
-        failedCount += group.length
       }
     }
 
+    // Cleanup temp files
     for (const imgPath of processedImages) {
       try { await fs.unlink(imgPath) } catch {}
     }
@@ -1220,7 +1241,6 @@ async function deliverPromoMaterials(ctx, session, userId) {
     })
     savePromo()
 
-    // Mark user as affiliate
     await updateUser(userId, { isAffiliate: true })
 
     const adminMsg = `🎨 Promo Banner Request Complete\n\n` +
@@ -1255,7 +1275,10 @@ async function deliverPromoMaterials(ctx, session, userId) {
 
   } catch (error) {
     console.error('Promo delivery error:', error)
-    try { await ctx.reply(`⚠️ ${loadLanguage('en').error_processing_banners}`) } catch {}
+    try {
+      await ctx.reply(`❌ An error occurred while generating banners. Please check the logs.`)
+    } catch {}
+    clearSession(userId)
   }
 }
 

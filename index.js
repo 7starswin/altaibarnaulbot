@@ -6,17 +6,14 @@ const { Telegraf, Markup } = require("telegraf")
 const sharp = require("sharp")
 const mongoose = require("mongoose")
 
-// ================= MONGODB CONNECTION (REQUIRED) =================
+// ================= MONGODB CONNECTION =================
 const MONGODB_URI = process.env.MONGODB_URI
 if (!MONGODB_URI) {
   console.error("❌ MONGODB_URI is not defined in environment variables")
   process.exit(1)
 }
 
-mongoose.connect(MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
+mongoose.connect(MONGODB_URI)
 .then(() => console.log("✅ MongoDB connected"))
 .catch(err => {
   console.error("❌ MongoDB connection error:", err)
@@ -46,7 +43,7 @@ const ADMIN_IDS = process.env.ADMIN_IDS
   ? process.env.ADMIN_IDS.split(",").map(id => parseInt(id.trim()))
   : []
 
-// ================= PERSISTENT STORAGE (JSON for non-user data) =================
+// ================= PERSISTENT STORAGE (JSON) =================
 const TICKETS_FILE = "./tickets.json"
 const PROMO_FILE = "./promo.json"
 const AGENT_FILE = "./agent.json"
@@ -83,7 +80,7 @@ try {
   console.error("Error loading agent requests:", err)
 }
 
-// ================= SAVE FUNCTIONS FOR JSON FILES =================
+// ================= SAVE FUNCTIONS =================
 function saveTickets() {
   fsSync.writeFileSync(TICKETS_FILE, JSON.stringify(pendingTickets, null, 2))
 }
@@ -117,7 +114,7 @@ function clearSession(userId) {
   delete sessions[userId]
 }
 
-// ================= USER DATA FUNCTIONS (MongoDB only) =================
+// ================= USER DATA FUNCTIONS =================
 async function findUser(userId) {
   return await User.findOne({ userId })
 }
@@ -152,7 +149,7 @@ async function getAllUserIds() {
   return users.map(u => u.userId)
 }
 
-// ================= CHECK PHONE BEFORE PROCEEDING (skip for admins) =================
+// ================= CHECK PHONE =================
 async function ensurePhone(ctx) {
   const userId = ctx.from.id
   if (ADMIN_IDS.includes(userId)) return true
@@ -169,19 +166,69 @@ async function ensurePhone(ctx) {
   return false
 }
 
-// ================= HELPER: safe username display =================
+// ================= HELPERS =================
 function displayUser(ctx) {
   if (ctx.from.username) return `@${ctx.from.username}`
   return `ID: ${ctx.from.id} (no username)`
 }
 
-// ================= UTILITY =================
 function safe(val) {
   return val !== undefined && val !== null && val !== "" ? val : "Not provided"
 }
 
 function generateTrackId() {
   return `TKT-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`
+}
+
+async function ensureFolder(folderPath) {
+  try {
+    await fs.mkdir(folderPath, { recursive: true })
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err
+  }
+}
+
+async function getFilesInFolder(folderPath) {
+  try {
+    const files = await fs.readdir(folderPath)
+    return files.filter(f => f.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i))
+  } catch (err) {
+    return []
+  }
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function formatDate() {
+  return new Date().toLocaleString()
+}
+
+async function logToAdmin(bot, adminIds, message) {
+  for (const adminId of adminIds) {
+    try {
+      await bot.telegram.sendMessage(adminId, message)
+    } catch (err) {
+      console.error(`Failed to log to admin ${adminId}:`, err)
+    }
+  }
+}
+
+async function saveSubmission(data) {
+  if (data.type === 'agent_response') {
+    const entry = {
+      userId: data.userId,
+      username: data.username || null,
+      country: data.data.country,
+      response: data.data.response,
+      interested: data.data.interested,
+      timestamp: Date.now()
+    };
+    agentRequests.push(entry);
+    saveAgentRequests();
+    console.log("✅ Agent request saved:", entry);
+  }
 }
 
 // ================= TRANSLATIONS =================
@@ -264,58 +311,6 @@ function loadLanguage(lang) {
   return translations[lang] || translations.en
 }
 
-// ================= HELPERS =================
-async function ensureFolder(folderPath) {
-  try {
-    await fs.mkdir(folderPath, { recursive: true })
-  } catch (err) {
-    if (err.code !== 'EEXIST') throw err
-  }
-}
-
-async function getFilesInFolder(folderPath) {
-  try {
-    const files = await fs.readdir(folderPath)
-    return files.filter(f => f.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i))
-  } catch (err) {
-    return []
-  }
-}
-
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms))
-}
-
-function formatDate() {
-  return new Date().toLocaleString()
-}
-
-async function logToAdmin(bot, adminIds, message) {
-  for (const adminId of adminIds) {
-    try {
-      await bot.telegram.sendMessage(adminId, message)
-    } catch (err) {
-      console.error(`Failed to log to admin ${adminId}:`, err)
-    }
-  }
-}
-
-async function saveSubmission(data) {
-  if (data.type === 'agent_response') {
-    const entry = {
-      userId: data.userId,
-      username: data.username || null,
-      country: data.data.country,
-      response: data.data.response,
-      interested: data.data.interested,
-      timestamp: Date.now()
-    };
-    agentRequests.push(entry);
-    saveAgentRequests();
-    console.log("✅ Agent request saved:", entry);
-  }
-}
-
 // ================= PROMO FLOW FUNCTIONS =================
 async function startPromoLanguageSelection(ctx) {
   try {
@@ -350,7 +345,7 @@ async function startPromoLanguageSelection(ctx) {
 bot.action(/promo_lang_(.+)/, async (ctx) => {
   if (!(await ensurePhone(ctx))) return
   try {
-    const lang = ctx.match[1] // en, bn, hi, tr, th, eg
+    const lang = ctx.match[1]
     const userId = ctx.from.id
     const session = getSession(userId)
     const texts = loadLanguage("en")
@@ -382,7 +377,7 @@ bot.action(/promo_lang_(.+)/, async (ctx) => {
 bot.action(/promo_cat_(.+)/, async (ctx) => {
   if (!(await ensurePhone(ctx))) return
   try {
-    const category = ctx.match[1] // cricket, football, matchday, video
+    const category = ctx.match[1]
     const userId = ctx.from.id
     const session = getSession(userId)
     const texts = loadLanguage("en")
@@ -548,7 +543,6 @@ async function handleAgentResponse(ctx, country, response) {
       status: 'pending'
     })
 
-    // Notify admins
     const adminMessage =
       `<b>🧑‍💼 Agent ${isInterested ? 'Interest' : 'Rejection'} - ${countryName}</b>\n\n` +
       `<b>User:</b> ${ctx.from.first_name}\n` +
@@ -639,7 +633,6 @@ bot.start(async (ctx) => {
 
     const phone = await getPhone(userId)
     if (phone) {
-      // Existing user – update info and show menu
       await updateUser(userId, {
         username: ctx.from.username,
         firstName: ctx.from.first_name,
@@ -648,7 +641,6 @@ bot.start(async (ctx) => {
       return ctx.reply("Welcome back to Support Bot!", userMenu())
     }
 
-    // New user – ask for phone
     await ctx.reply(
       "Please share your phone number to continue:",
       Markup.keyboard([
@@ -895,130 +887,223 @@ bot.hears("🎨 Generate Promo", async (ctx) => {
   }
 })
 
-// ================= TEXT HANDLER =================
-bot.on("text", async (ctx) => {
+// ================= ROBUST ADMIN MENU HANDLER =================
+// This single handler catches all admin menu buttons by looking for keywords.
+bot.hears(/.*/, async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+
+  const text = ctx.message.text
+  console.log("Admin message received:", text) // for debugging
+
   try {
-    const session = getSession(ctx.from.id)
-    const userId = ctx.from.id
-
-    // ADMIN BROADCAST MESSAGE
-    if (ADMIN_IDS.includes(userId) && session.state === "admin_broadcast_message") {
-      const message = ctx.message.text
-      const category = session.broadcastCategory
-
-      let targetUserIds = []
-      if (category === 'all') {
-        targetUserIds = await getAllUserIds()
-      } else {
-        const flag = category === 'players' ? 'isPlayer' : (category === 'affiliates' ? 'isAffiliate' : 'isAgent')
-        const users = await User.find({ [flag]: true }, 'userId')
-        targetUserIds = users.map(u => u.userId)
+    if (text.includes("Deposit Problems")) {
+      showTicketList(ctx, "deposit", 0)
+    } else if (text.includes("Withdrawal Problems")) {
+      showTicketList(ctx, "withdrawal", 0)
+    } else if (text.includes("Agent Requests")) {
+      if (agentRequests.length === 0) {
+        return ctx.reply("No agent requests yet.")
       }
-
-      const total = targetUserIds.length
-      ctx.reply(`Broadcasting to ${total} users in category "${category}"...`)
-
-      let successCount = 0
-      let failCount = 0
-      const promises = targetUserIds.map(uid =>
-        bot.telegram.sendMessage(uid, `📢 Broadcast from admin (${category}):\n\n${message}`)
-          .then(() => successCount++)
-          .catch(() => failCount++)
-      )
-
-      Promise.all(promises).then(() => {
-        ctx.reply(`✅ Broadcast finished.\nSent: ${successCount}\nFailed: ${failCount}`)
+      let msg = "🤝 **Agent Requests**\n\n"
+      const recent = [...agentRequests].reverse().slice(0, 10)
+      recent.forEach((req, i) => {
+        const user = req.username ? `@${req.username}` : `ID: ${req.userId}`
+        const status = req.interested ? "✅ Accepted" : "❌ Rejected"
+        msg += `${i+1}. ${user} | ${req.country} | ${status} | ${new Date(req.timestamp).toLocaleString()}\n`
       })
-
-      clearSession(userId)
-      return
-    }
-
-    // USER REPLY TO ADMIN
-    if (!ADMIN_IDS.includes(userId) && !session.state) {
-      const adminId = userLastAdmin[userId]
-      if (adminId) {
-        bot.telegram.sendMessage(
-          adminId,
-          `✉️ Reply from user ${displayUser(ctx)}:\n\n${ctx.message.text}`,
-          Markup.inlineKeyboard([
-            [Markup.button.callback("💬 Reply to user", `reply_${userId}`)]
-          ])
-        ).catch(() => {
-          ctx.reply("Sorry, we couldn't deliver your message. Please try again later.")
-        })
-        ctx.reply("✅ Your reply has been sent to the support team.")
-      } else {
-        ctx.reply("You don't have an ongoing conversation. Please start a new support ticket using the menu.")
+      ctx.reply(msg, { parse_mode: "Markdown" })
+    } else if (text.includes("Broadcast")) {
+      const session = getSession(ctx.from.id)
+      session.state = "admin_broadcast_category"
+      await ctx.reply(
+        "Select broadcast target:",
+        Markup.inlineKeyboard([
+          [Markup.button.callback("All Users", "broadcast_all")],
+          [Markup.button.callback("Players", "broadcast_players")],
+          [Markup.button.callback("Affiliates", "broadcast_affiliates")],
+          [Markup.button.callback("Agents", "broadcast_agents")],
+          [Markup.button.callback("Cancel", "main_menu")]
+        ])
+      )
+    } else if (text.includes("Promo Activity")) {
+      if (promoActivities.length === 0) {
+        return ctx.reply("No promo activity yet.")
       }
-      return
-    }
-
-    // ADMIN REPLY
-    if (ADMIN_IDS.includes(userId) && session.state === "admin_reply") {
-      const targetUserId = session.data.targetUserId
-      if (!targetUserId) {
-        ctx.reply("❌ Error: No user to reply to. Please click 'Reply' again.")
-        clearSession(userId)
-        return
-      }
-      bot.telegram.sendMessage(targetUserId, `✉️ Admin reply:\n\n${ctx.message.text}`)
-        .then(() => {
-          ctx.reply("✅ Your reply has been sent to the user.")
-          userLastAdmin[targetUserId] = userId
-        })
-        .catch(() => {
-          ctx.reply("❌ Failed to send message. The user might have blocked the bot.")
-        })
-      clearSession(userId)
-      return
-    }
-
-    // PROMO CODE WAITING
-    if (session.state === "waiting_promo_code") {
-      const promoCode = ctx.message.text.trim()
-      if (promoCode.length > 10) {
-        ctx.reply("⚠️ Promo code must be max 10 characters. Please try again.")
-        return
-      }
-      session.data.promoCode = promoCode
-      await deliverPromoMaterials(ctx, session, userId)
-      return
-    }
-
-    // SUPPORT FLOW
-    if (session.state === "waiting_game_user_id") {
-      session.data.gameUserId = ctx.message.text
-      session.state = "waiting_phone_number"
-      ctx.reply("Enter Phone Number (format: +880XXXXXXXXXXX):")
-    }
-    else if (session.state === "waiting_phone_number") {
-      session.data.phoneNumber = ctx.message.text
-      session.state = "waiting_agent_number"
-      ctx.reply("Enter Agent Number:")
-    }
-    else if (session.state === "waiting_agent_number") {
-      session.data.agentNumber = ctx.message.text
-      session.state = "waiting_date"
-      showCalendar(ctx, session)
-    }
-    else if (session.state === "waiting_time") {
-      session.data.selectedTime = ctx.message.text
-      session.state = "waiting_amount"
-      ctx.reply("Enter Amount:")
-    }
-    else if (session.state === "waiting_amount") {
-      session.data.amount = ctx.message.text
-      session.state = "waiting_trx_id"
-      ctx.reply("Enter Transaction ID (Trx ID):")
-    }
-    else if (session.state === "waiting_trx_id") {
-      session.data.trxId = ctx.message.text
-      session.state = "waiting_file"
-      ctx.reply("Please upload a screenshot or video file.")
+      let msg = "📊 **Promo Banner Requests**\n\n"
+      const recent = [...promoActivities].reverse().slice(0, 10)
+      recent.forEach((p, i) => {
+        const user = p.username ? `@${p.username}` : `ID: ${p.userId}`
+        msg += `${i+1}. ${user} | Code: **${p.promoCode}** | Lang: ${p.language} | Cat: ${p.category} | ${new Date(p.timestamp).toLocaleString()}\n`
+      })
+      ctx.reply(msg, { parse_mode: "Markdown" })
+    } else if (text.includes("Generate Promo")) {
+      await startPromoLanguageSelection(ctx)
+    } else if (text.includes("Users")) {
+      await ctx.reply(
+        "Select user category:",
+        Markup.inlineKeyboard([
+          [Markup.button.callback("👥 Players", "show_players")],
+          [Markup.button.callback("👥 Affiliates", "show_affiliates")],
+          [Markup.button.callback("👥 Agents", "show_agents")],
+          [Markup.button.callback("🔙 Back to Admin Menu", "main_menu")]
+        ])
+      )
     }
   } catch (err) {
-    console.error("Error in text handler:", err)
+    console.error("Error in admin menu handler:", err)
+  }
+})
+
+// ================= BROADCAST CALLBACKS =================
+bot.action(/broadcast_(.+)/, async (ctx) => {
+  const category = ctx.match[1]
+  const adminId = ctx.from.id
+  const session = getSession(adminId)
+  session.state = "admin_broadcast_message"
+  session.broadcastCategory = category
+  await ctx.editMessageText(`📢 You selected: **${category}**.\nNow type the message to broadcast.`)
+  await ctx.answerCbQuery().catch(() => {})
+})
+
+// ================= USER LIST CALLBACKS =================
+async function showUserList(ctx, flag, displayName) {
+  try {
+    const usersList = await getUsersByFlag(flag)
+    const total = await countUsersByFlag(flag)
+
+    let msg = `👥 **${displayName}** (Total: ${total})\n\n`
+    if (usersList.length === 0) {
+      msg += "No users in this category."
+    } else {
+      usersList.forEach((u, i) => {
+        const name = u.username ? `@${u.username}` : `ID: ${u.userId}`
+        msg += `${i+1}. ${name}\n`
+      })
+    }
+    await ctx.editMessageText(msg, { parse_mode: "Markdown" })
+    await ctx.answerCbQuery().catch(() => {})
+  } catch (err) {
+    console.error(`Error in showUserList for ${displayName}:`, err)
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+  }
+}
+
+bot.action("show_players", async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  await showUserList(ctx, 'isPlayer', 'Players')
+})
+
+bot.action("show_affiliates", async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  await showUserList(ctx, 'isAffiliate', 'Affiliates')
+})
+
+bot.action("show_agents", async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  await showUserList(ctx, 'isAgent', 'Agents')
+})
+
+// ================= TICKET LIST FUNCTIONS =================
+function showTicketList(ctx, category, page) {
+  try {
+    const tickets = pendingTickets.filter(t => t.category === category && t.status === "open")
+    const pageSize = 5
+    const totalPages = Math.ceil(tickets.length / pageSize) || 1
+    const start = page * pageSize
+    const end = start + pageSize
+    const pageTickets = tickets.slice(start, end)
+
+    if (tickets.length === 0) {
+      ctx.reply(`No open ${category} tickets.`)
+      return
+    }
+
+    const buttons = []
+    pageTickets.forEach(t => {
+      const username = t.username ? `@${t.username}` : `ID: ${t.userId}`
+      buttons.push([Markup.button.callback(
+        `${t.trackId} - ${username}`,
+        `view_${category}_${t.trackId}`
+      )])
+    })
+
+    const nav = []
+    if (page > 0) {
+      nav.push(Markup.button.callback("« Previous", `${category}_page_${page - 1}`))
+    }
+    nav.push(Markup.button.callback(`Page ${page+1}/${totalPages}`, "ignore"))
+    if (page < totalPages - 1) {
+      nav.push(Markup.button.callback("Next »", `${category}_page_${page + 1}`))
+    }
+    buttons.push(nav)
+    buttons.push([Markup.button.callback("🔙 Main Menu", "main_menu")])
+
+    ctx.reply(
+      `📋 Open ${category === "deposit" ? "Deposit" : "Withdrawal"} Tickets:`,
+      Markup.inlineKeyboard(buttons)
+    )
+  } catch (err) {
+    console.error("Error in showTicketList:", err)
+  }
+}
+
+bot.action(/^(deposit|withdrawal)_page_(\d+)$/, async (ctx) => {
+  try {
+    const category = ctx.match[1]
+    const page = parseInt(ctx.match[2])
+    showTicketList(ctx, category, page)
+    await ctx.answerCbQuery().catch(() => {})
+  } catch (err) {
+    console.error("Error in pagination action:", err)
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+  }
+})
+
+bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
+  try {
+    const category = ctx.match[1]
+    const trackId = ctx.match[2]
+    const ticket = pendingTickets.find(t => t.trackId === trackId && t.status === "open")
+    if (!ticket) {
+      await ctx.answerCbQuery("Ticket not found or already resolved.")
+      return ctx.editMessageText("Ticket not found.")
+    }
+
+    const data = ticket.data
+    const user = ticket.username ? `@${ticket.username}` : `ID: ${ticket.userId}`
+    const details = `🎫 **Ticket ${trackId}**
+
+**User:** ${user}
+**Country:** ${safe(data.country)}
+**Issue:** ${safe(data.issueType)}
+**Payment:** ${safe(data.paymentSystem)}
+**Game User ID:** ${safe(data.gameUserId)}
+**Phone:** ${safe(data.phoneNumber)}
+**Agent:** ${safe(data.agentNumber)}
+**Date:** ${safe(data.selectedDate)}
+**Time:** ${safe(data.selectedTime)}
+**Amount:** ${safe(data.amount)}
+**Trx ID:** ${safe(data.trxId)}
+**File:** ${safe(data.fileName)}`
+
+    await ctx.editMessageText(details, {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "💬 Reply", callback_data: `reply_${ticket.userId}` },
+            { text: "✅ Resolve", callback_data: `resolve_${trackId}_${ticket.userId}` }
+          ],
+          [
+            { text: "🔙 Back to list", callback_data: `${category}_page_0` }
+          ]
+        ]
+      }
+    })
+    await ctx.answerCbQuery().catch(() => {})
+  } catch (err) {
+    console.error("Error in view ticket action:", err)
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
   }
 })
 
@@ -1389,127 +1474,6 @@ bot.action("main_menu", async (ctx) => {
   }
 })
 
-// ================= ADMIN USERS SUBMENU =================
-bot.hears("👥 Users", async (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  try {
-    await ctx.reply(
-      "Select user category:",
-      Markup.inlineKeyboard([
-        [Markup.button.callback("👥 Players", "show_players")],
-        [Markup.button.callback("👥 Affiliates", "show_affiliates")],
-        [Markup.button.callback("👥 Agents", "show_agents")],
-        [Markup.button.callback("🔙 Back to Admin Menu", "main_menu")]
-      ])
-    )
-  } catch (err) {
-    console.error("Error in Users hears:", err)
-  }
-})
-
-async function showUserList(ctx, flag, displayName) {
-  try {
-    const usersList = await getUsersByFlag(flag)
-    const total = await countUsersByFlag(flag)
-
-    let msg = `👥 **${displayName}** (Total: ${total})\n\n`
-    if (usersList.length === 0) {
-      msg += "No users in this category."
-    } else {
-      usersList.forEach((u, i) => {
-        const name = u.username ? `@${u.username}` : `ID: ${u.userId}`
-        msg += `${i+1}. ${name}\n`
-      })
-    }
-    await ctx.editMessageText(msg, { parse_mode: "Markdown" })
-    await ctx.answerCbQuery().catch(() => {})
-  } catch (err) {
-    console.error(`Error in showUserList for ${displayName}:`, err)
-    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
-  }
-}
-
-bot.action("show_players", async (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  await showUserList(ctx, 'isPlayer', 'Players')
-})
-
-bot.action("show_affiliates", async (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  await showUserList(ctx, 'isAffiliate', 'Affiliates')
-})
-
-bot.action("show_agents", async (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  await showUserList(ctx, 'isAgent', 'Agents')
-})
-
-// ================= BROADCAST WITH CATEGORY =================
-bot.hears("📢 Broadcast", async (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  const session = getSession(ctx.from.id)
-  session.state = "admin_broadcast_category"
-  await ctx.reply(
-    "Select broadcast target:",
-    Markup.inlineKeyboard([
-      [Markup.button.callback("All Users", "broadcast_all")],
-      [Markup.button.callback("Players", "broadcast_players")],
-      [Markup.button.callback("Affiliates", "broadcast_affiliates")],
-      [Markup.button.callback("Agents", "broadcast_agents")],
-      [Markup.button.callback("Cancel", "main_menu")]
-    ])
-  )
-})
-
-bot.action(/broadcast_(.+)/, async (ctx) => {
-  const category = ctx.match[1] // all, players, affiliates, agents
-  const adminId = ctx.from.id
-  const session = getSession(adminId)
-  session.state = "admin_broadcast_message"
-  session.broadcastCategory = category
-  await ctx.editMessageText(`📢 You selected: **${category}**.\nNow type the message to broadcast.`)
-  await ctx.answerCbQuery().catch(() => {})
-})
-
-// ================= ADMIN MENU REGEX HANDLER =================
-bot.hears(/^(.*Deposit Problems.*|.*Withdrawal Problems.*|.*Agent Requests.*|.*Promo Activity.*)$/, async (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) return
-  try {
-    const text = ctx.message.text
-
-    if (text.includes("Deposit Problems")) {
-      showTicketList(ctx, "deposit", 0)
-    } else if (text.includes("Withdrawal Problems")) {
-      showTicketList(ctx, "withdrawal", 0)
-    } else if (text.includes("Agent Requests")) {
-      if (agentRequests.length === 0) {
-        return ctx.reply("No agent requests yet.")
-      }
-      let msg = "🤝 **Agent Requests**\n\n"
-      const recent = [...agentRequests].reverse().slice(0, 10)
-      recent.forEach((req, i) => {
-        const user = req.username ? `@${req.username}` : `ID: ${req.userId}`
-        const status = req.interested ? "✅ Accepted" : "❌ Rejected"
-        msg += `${i+1}. ${user} | ${req.country} | ${status} | ${new Date(req.timestamp).toLocaleString()}\n`
-      })
-      ctx.reply(msg, { parse_mode: "Markdown" })
-    } else if (text.includes("Promo Activity")) {
-      if (promoActivities.length === 0) {
-        return ctx.reply("No promo activity yet.")
-      }
-      let msg = "📊 **Promo Banner Requests**\n\n"
-      const recent = [...promoActivities].reverse().slice(0, 10)
-      recent.forEach((p, i) => {
-        const user = p.username ? `@${p.username}` : `ID: ${p.userId}`
-        msg += `${i+1}. ${user} | Code: **${p.promoCode}** | Lang: ${p.language} | Cat: ${p.category} | ${new Date(p.timestamp).toLocaleString()}\n`
-      })
-      ctx.reply(msg, { parse_mode: "Markdown" })
-    }
-  } catch (err) {
-    console.error("Error in admin menu regex handler:", err)
-  }
-})
-
 // ================= ADMIN ACTIONS =================
 bot.action(/resolve_(.+)_(\d+)/, async (ctx) => {
   try {
@@ -1792,7 +1756,6 @@ bot.action("submit_player", async (ctx) => {
     pendingTickets.push(ticket)
     saveTickets()
 
-    // Mark user as player
     await updateUser(userId, { isPlayer: true })
 
     const message = `🎫 Player Request\nTrack ID: ${trackId}
@@ -1864,107 +1827,130 @@ Transaction ID: ${safe(session.data.trxId)}`
   }
 })
 
-// ================= TICKET LIST DISPLAY FUNCTION =================
-function showTicketList(ctx, category, page) {
+// ================= TEXT HANDLER =================
+bot.on("text", async (ctx) => {
   try {
-    const tickets = pendingTickets.filter(t => t.category === category && t.status === "open")
-    const pageSize = 5
-    const totalPages = Math.ceil(tickets.length / pageSize) || 1
-    const start = page * pageSize
-    const end = start + pageSize
-    const pageTickets = tickets.slice(start, end)
+    const session = getSession(ctx.from.id)
+    const userId = ctx.from.id
 
-    if (tickets.length === 0) {
-      ctx.reply(`No open ${category} tickets.`)
+    // ADMIN BROADCAST MESSAGE
+    if (ADMIN_IDS.includes(userId) && session.state === "admin_broadcast_message") {
+      const message = ctx.message.text
+      const category = session.broadcastCategory
+
+      let targetUserIds = []
+      if (category === 'all') {
+        targetUserIds = await getAllUserIds()
+      } else {
+        const flag = category === 'players' ? 'isPlayer' : (category === 'affiliates' ? 'isAffiliate' : 'isAgent')
+        const users = await User.find({ [flag]: true }, 'userId')
+        targetUserIds = users.map(u => u.userId)
+      }
+
+      const total = targetUserIds.length
+      ctx.reply(`Broadcasting to ${total} users in category "${category}"...`)
+
+      let successCount = 0
+      let failCount = 0
+      const promises = targetUserIds.map(uid =>
+        bot.telegram.sendMessage(uid, `📢 Broadcast from admin (${category}):\n\n${message}`)
+          .then(() => successCount++)
+          .catch(() => failCount++)
+      )
+
+      Promise.all(promises).then(() => {
+        ctx.reply(`✅ Broadcast finished.\nSent: ${successCount}\nFailed: ${failCount}`)
+      })
+
+      clearSession(userId)
       return
     }
 
-    const buttons = []
-    pageTickets.forEach(t => {
-      const username = t.username ? `@${t.username}` : `ID: ${t.userId}`
-      buttons.push([Markup.button.callback(
-        `${t.trackId} - ${username}`,
-        `view_${category}_${t.trackId}`
-      )])
-    })
-
-    const nav = []
-    if (page > 0) {
-      nav.push(Markup.button.callback("« Previous", `${category}_page_${page - 1}`))
-    }
-    nav.push(Markup.button.callback(`Page ${page+1}/${totalPages}`, "ignore"))
-    if (page < totalPages - 1) {
-      nav.push(Markup.button.callback("Next »", `${category}_page_${page + 1}`))
-    }
-    buttons.push(nav)
-    buttons.push([Markup.button.callback("🔙 Main Menu", "main_menu")])
-
-    ctx.reply(
-      `📋 Open ${category === "deposit" ? "Deposit" : "Withdrawal"} Tickets:`,
-      Markup.inlineKeyboard(buttons)
-    )
-  } catch (err) {
-    console.error("Error in showTicketList:", err)
-  }
-}
-
-bot.action(/^(deposit|withdrawal)_page_(\d+)$/, async (ctx) => {
-  try {
-    const category = ctx.match[1]
-    const page = parseInt(ctx.match[2])
-    showTicketList(ctx, category, page)
-    await ctx.answerCbQuery().catch(() => {})
-  } catch (err) {
-    console.error("Error in pagination action:", err)
-    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
-  }
-})
-
-bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
-  try {
-    const category = ctx.match[1]
-    const trackId = ctx.match[2]
-    const ticket = pendingTickets.find(t => t.trackId === trackId && t.status === "open")
-    if (!ticket) {
-      await ctx.answerCbQuery("Ticket not found or already resolved.")
-      return ctx.editMessageText("Ticket not found.")
-    }
-
-    const data = ticket.data
-    const user = ticket.username ? `@${ticket.username}` : `ID: ${ticket.userId}`
-    const details = `🎫 **Ticket ${trackId}**
-
-**User:** ${user}
-**Country:** ${safe(data.country)}
-**Issue:** ${safe(data.issueType)}
-**Payment:** ${safe(data.paymentSystem)}
-**Game User ID:** ${safe(data.gameUserId)}
-**Phone:** ${safe(data.phoneNumber)}
-**Agent:** ${safe(data.agentNumber)}
-**Date:** ${safe(data.selectedDate)}
-**Time:** ${safe(data.selectedTime)}
-**Amount:** ${safe(data.amount)}
-**Trx ID:** ${safe(data.trxId)}
-**File:** ${safe(data.fileName)}`
-
-    await ctx.editMessageText(details, {
-      parse_mode: "Markdown",
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: "💬 Reply", callback_data: `reply_${ticket.userId}` },
-            { text: "✅ Resolve", callback_data: `resolve_${trackId}_${ticket.userId}` }
-          ],
-          [
-            { text: "🔙 Back to list", callback_data: `${category}_page_0` }
-          ]
-        ]
+    // USER REPLY TO ADMIN
+    if (!ADMIN_IDS.includes(userId) && !session.state) {
+      const adminId = userLastAdmin[userId]
+      if (adminId) {
+        bot.telegram.sendMessage(
+          adminId,
+          `✉️ Reply from user ${displayUser(ctx)}:\n\n${ctx.message.text}`,
+          Markup.inlineKeyboard([
+            [Markup.button.callback("💬 Reply to user", `reply_${userId}`)]
+          ])
+        ).catch(() => {
+          ctx.reply("Sorry, we couldn't deliver your message. Please try again later.")
+        })
+        ctx.reply("✅ Your reply has been sent to the support team.")
+      } else {
+        ctx.reply("You don't have an ongoing conversation. Please start a new support ticket using the menu.")
       }
-    })
-    await ctx.answerCbQuery().catch(() => {})
+      return
+    }
+
+    // ADMIN REPLY
+    if (ADMIN_IDS.includes(userId) && session.state === "admin_reply") {
+      const targetUserId = session.data.targetUserId
+      if (!targetUserId) {
+        ctx.reply("❌ Error: No user to reply to. Please click 'Reply' again.")
+        clearSession(userId)
+        return
+      }
+      bot.telegram.sendMessage(targetUserId, `✉️ Admin reply:\n\n${ctx.message.text}`)
+        .then(() => {
+          ctx.reply("✅ Your reply has been sent to the user.")
+          userLastAdmin[targetUserId] = userId
+        })
+        .catch(() => {
+          ctx.reply("❌ Failed to send message. The user might have blocked the bot.")
+        })
+      clearSession(userId)
+      return
+    }
+
+    // PROMO CODE WAITING
+    if (session.state === "waiting_promo_code") {
+      const promoCode = ctx.message.text.trim()
+      if (promoCode.length > 10) {
+        ctx.reply("⚠️ Promo code must be max 10 characters. Please try again.")
+        return
+      }
+      session.data.promoCode = promoCode
+      await deliverPromoMaterials(ctx, session, userId)
+      return
+    }
+
+    // SUPPORT FLOW
+    if (session.state === "waiting_game_user_id") {
+      session.data.gameUserId = ctx.message.text
+      session.state = "waiting_phone_number"
+      ctx.reply("Enter Phone Number (format: +880XXXXXXXXXXX):")
+    }
+    else if (session.state === "waiting_phone_number") {
+      session.data.phoneNumber = ctx.message.text
+      session.state = "waiting_agent_number"
+      ctx.reply("Enter Agent Number:")
+    }
+    else if (session.state === "waiting_agent_number") {
+      session.data.agentNumber = ctx.message.text
+      session.state = "waiting_date"
+      showCalendar(ctx, session)
+    }
+    else if (session.state === "waiting_time") {
+      session.data.selectedTime = ctx.message.text
+      session.state = "waiting_amount"
+      ctx.reply("Enter Amount:")
+    }
+    else if (session.state === "waiting_amount") {
+      session.data.amount = ctx.message.text
+      session.state = "waiting_trx_id"
+      ctx.reply("Enter Transaction ID (Trx ID):")
+    }
+    else if (session.state === "waiting_trx_id") {
+      session.data.trxId = ctx.message.text
+      session.state = "waiting_file"
+      ctx.reply("Please upload a screenshot or video file.")
+    }
   } catch (err) {
-    console.error("Error in view ticket action:", err)
-    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+    console.error("Error in text handler:", err)
   }
 })
 

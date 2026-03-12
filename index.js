@@ -316,6 +316,7 @@ function loadLanguage(lang) {
 
 // ================= PROMO FLOW FUNCTIONS =================
 async function startPromoLanguageSelection(ctx) {
+  console.log("📢 startPromoLanguageSelection called")
   try {
     const userId = ctx.from.id
     const session = getSession(userId)
@@ -346,6 +347,7 @@ async function startPromoLanguageSelection(ctx) {
 }
 
 bot.action(/promo_lang_(.+)/, async (ctx) => {
+  console.log("🔘 promo_lang action triggered with", ctx.match[1])
   if (!(await ensurePhone(ctx))) return
   try {
     const lang = ctx.match[1]
@@ -381,6 +383,7 @@ bot.action(/promo_lang_(.+)/, async (ctx) => {
 })
 
 bot.action(/promo_cat_(.+)/, async (ctx) => {
+  console.log("🔘 promo_cat action triggered with", ctx.match[1])
   if (!(await ensurePhone(ctx))) return
   try {
     const category = ctx.match[1] // cricket, football, matchday, video, all
@@ -404,6 +407,7 @@ bot.action(/promo_cat_(.+)/, async (ctx) => {
 
 // ================= AGENT FLOW FUNCTIONS =================
 async function agentFlow(ctx) {
+  console.log("👤 agentFlow called")
   try {
     const userId = ctx.from.id
     const session = getSession(userId)
@@ -436,6 +440,7 @@ async function agentFlow(ctx) {
 }
 
 async function showAgentDetails(ctx, country) {
+  console.log("📋 showAgentDetails for", country)
   try {
     const userId = ctx.from.id
     const session = getSession(userId)
@@ -476,6 +481,7 @@ async function showAgentDetails(ctx, country) {
 }
 
 async function showAgentConfirmation(ctx, country) {
+  console.log("✅ showAgentConfirmation for", country)
   try {
     const userId = ctx.from.id
     const session = getSession(userId)
@@ -516,6 +522,7 @@ async function showAgentConfirmation(ctx, country) {
 }
 
 async function handleAgentResponse(ctx, country, response) {
+  console.log("📬 handleAgentResponse", country, response)
   try {
     const userId = ctx.from.id
     const session = getSession(userId)
@@ -631,6 +638,7 @@ function adminMenu() {
 
 // ================= START =================
 bot.start(async (ctx) => {
+  console.log("🚀 /start command from", ctx.from.id)
   try {
     const userId = ctx.from.id
     if (ADMIN_IDS.includes(userId)) {
@@ -660,6 +668,7 @@ bot.start(async (ctx) => {
 
 // ================= CONTACT HANDLER =================
 bot.on("contact", async (ctx) => {
+  console.log("📞 contact received from", ctx.from.id)
   try {
     const userId = ctx.from.id
     const phone = ctx.message.contact.phone_number
@@ -683,6 +692,7 @@ bot.on("contact", async (ctx) => {
 
 // ================= MAIN MENU HANDLER =================
 bot.hears("🔙 Main Menu", async (ctx) => {
+  console.log("🔙 Main Menu heard from", ctx.from.id)
   try {
     if (ADMIN_IDS.includes(ctx.from.id)) {
       return ctx.reply("Admin menu:", adminMenu())
@@ -696,6 +706,7 @@ bot.hears("🔙 Main Menu", async (ctx) => {
 
 // ================= USER MENU HANDLERS =================
 bot.hears("Player Support", async (ctx) => {
+  console.log("👤 Player Support heard from", ctx.from.id)
   if (!(await ensurePhone(ctx))) return
   try {
     await updateUser(ctx.from.id, { isPlayer: true })
@@ -722,6 +733,7 @@ bot.hears("Player Support", async (ctx) => {
 })
 
 bot.hears("Affiliate Support", async (ctx) => {
+  console.log("🤝 Affiliate Support heard from", ctx.from.id)
   if (!(await ensurePhone(ctx))) return
   try {
     await updateUser(ctx.from.id, { isAffiliate: true })
@@ -750,6 +762,7 @@ bot.hears("Affiliate Support", async (ctx) => {
 })
 
 bot.hears("Become Agent", async (ctx) => {
+  console.log("🧑‍💼 Become Agent heard from", ctx.from.id)
   if (!(await ensurePhone(ctx))) return
   try {
     const userId = ctx.from.id
@@ -762,6 +775,7 @@ bot.hears("Become Agent", async (ctx) => {
 
 // ================= AFFILIATE MANAGER =================
 bot.action("affiliate_manager", async (ctx) => {
+  console.log("🔘 affiliate_manager action triggered")
   if (!(await ensurePhone(ctx))) return
   try {
     const userId = ctx.from.id
@@ -794,6 +808,7 @@ bot.action("affiliate_manager", async (ctx) => {
 })
 
 bot.action(/manager_country_(.+)/, async (ctx) => {
+  console.log("🔘 manager_country action triggered with", ctx.match[1])
   if (!(await ensurePhone(ctx))) return
   try {
     const country = ctx.match[1]
@@ -834,6 +849,7 @@ bot.action(/manager_country_(.+)/, async (ctx) => {
 
 // ================= AGENT FLOW CALLBACKS =================
 bot.action(/agent_country_(.+)/, async (ctx) => {
+  console.log("🔘 agent_country action triggered with", ctx.match[1])
   if (!(await ensurePhone(ctx))) return
   try {
     const country = ctx.match[1]
@@ -846,6 +862,7 @@ bot.action(/agent_country_(.+)/, async (ctx) => {
 })
 
 bot.action(/agent_next_(.+)/, async (ctx) => {
+  console.log("🔘 agent_next action triggered with", ctx.match[1])
   if (!(await ensurePhone(ctx))) return
   try {
     const country = ctx.match[1]
@@ -858,6 +875,7 @@ bot.action(/agent_next_(.+)/, async (ctx) => {
 })
 
 bot.action(/agent_(accept|reject)_(.+)/, async (ctx) => {
+  console.log("🔘 agent_accept/reject action triggered with", ctx.match[1], ctx.match[2])
   if (!(await ensurePhone(ctx))) return
   try {
     const response = ctx.match[1]
@@ -872,6 +890,7 @@ bot.action(/agent_(accept|reject)_(.+)/, async (ctx) => {
 
 // ================= PROMO BANNER (AFFILIATE) =================
 bot.action("affiliate_promo_banner", async (ctx) => {
+  console.log("🔘 affiliate_promo_banner action triggered")
   if (!(await ensurePhone(ctx))) return
   try {
     await updateUser(ctx.from.id, { isAffiliate: true })
@@ -885,6 +904,7 @@ bot.action("affiliate_promo_banner", async (ctx) => {
 
 // ================= ADMIN GENERATE PROMO =================
 bot.hears("🎨 Generate Promo", async (ctx) => {
+  console.log("🎨 Generate Promo heard from", ctx.from.id)
   if (!ADMIN_IDS.includes(ctx.from.id)) return
   try {
     await startPromoLanguageSelection(ctx)
@@ -961,6 +981,7 @@ bot.hears(/.*/, async (ctx) => {
 
 // ================= BROADCAST CALLBACKS =================
 bot.action(/broadcast_(.+)/, async (ctx) => {
+  console.log("🔘 broadcast action triggered with", ctx.match[1])
   const category = ctx.match[1]
   const adminId = ctx.from.id
   const session = getSession(adminId)
@@ -972,6 +993,7 @@ bot.action(/broadcast_(.+)/, async (ctx) => {
 
 // ================= USER LIST CALLBACKS =================
 async function showUserList(ctx, flag, displayName) {
+  console.log("📋 showUserList for", displayName)
   try {
     const usersList = await getUsersByFlag(flag)
     const total = await countUsersByFlag(flag)
@@ -994,22 +1016,26 @@ async function showUserList(ctx, flag, displayName) {
 }
 
 bot.action("show_players", async (ctx) => {
+  console.log("🔘 show_players action")
   if (!ADMIN_IDS.includes(ctx.from.id)) return
   await showUserList(ctx, 'isPlayer', 'Players')
 })
 
 bot.action("show_affiliates", async (ctx) => {
+  console.log("🔘 show_affiliates action")
   if (!ADMIN_IDS.includes(ctx.from.id)) return
   await showUserList(ctx, 'isAffiliate', 'Affiliates')
 })
 
 bot.action("show_agents", async (ctx) => {
+  console.log("🔘 show_agents action")
   if (!ADMIN_IDS.includes(ctx.from.id)) return
   await showUserList(ctx, 'isAgent', 'Agents')
 })
 
 // ================= TICKET LIST FUNCTIONS =================
 function showTicketList(ctx, category, page) {
+  console.log("📋 showTicketList for", category, "page", page)
   try {
     const tickets = pendingTickets.filter(t => t.category === category && t.status === "open")
     const pageSize = 5
@@ -1053,6 +1079,7 @@ function showTicketList(ctx, category, page) {
 }
 
 bot.action(/^(deposit|withdrawal)_page_(\d+)$/, async (ctx) => {
+  console.log("🔘 pagination action", ctx.match[1], ctx.match[2])
   try {
     const category = ctx.match[1]
     const page = parseInt(ctx.match[2])
@@ -1065,6 +1092,7 @@ bot.action(/^(deposit|withdrawal)_page_(\d+)$/, async (ctx) => {
 })
 
 bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
+  console.log("🔘 view ticket action", ctx.match[1], ctx.match[2])
   try {
     const category = ctx.match[1]
     const trackId = ctx.match[2]
@@ -1341,6 +1369,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
 
 // ================= FILE HANDLER =================
 bot.on(["photo", "video"], async (ctx) => {
+  console.log("📎 file received from", ctx.from.id)
   try {
     const session = getSession(ctx.from.id)
     const userId = ctx.from.id
@@ -1398,6 +1427,7 @@ bot.on(["photo", "video"], async (ctx) => {
 
 // ================= CALENDAR =================
 function showCalendar(ctx, session) {
+  console.log("📅 showCalendar called")
   try {
     let year = session.calendar.year
     let month = session.calendar.month
@@ -1446,6 +1476,7 @@ function showCalendar(ctx, session) {
 }
 
 bot.action(/date_(\d+)/, async (ctx) => {
+  console.log("🔘 date action", ctx.match[1])
   if (!(await ensurePhone(ctx))) return
   try {
     const day = ctx.match[1]
@@ -1464,6 +1495,7 @@ bot.action(/date_(\d+)/, async (ctx) => {
 })
 
 bot.action("prev_month", async (ctx) => {
+  console.log("🔘 prev_month action")
   if (!(await ensurePhone(ctx))) return
   try {
     const session = getSession(ctx.from.id)
@@ -1484,6 +1516,7 @@ bot.action("prev_month", async (ctx) => {
 })
 
 bot.action("next_month", async (ctx) => {
+  console.log("🔘 next_month action")
   if (!(await ensurePhone(ctx))) return
   try {
     const session = getSession(ctx.from.id)
@@ -1504,6 +1537,7 @@ bot.action("next_month", async (ctx) => {
 })
 
 bot.action("ignore", async (ctx) => {
+  console.log("🔘 ignore action")
   try {
     await ctx.answerCbQuery().catch(() => {})
   } catch (err) {
@@ -1513,6 +1547,7 @@ bot.action("ignore", async (ctx) => {
 
 // ================= RESTART / MAIN MENU =================
 bot.action("restart_player", async (ctx) => {
+  console.log("🔘 restart_player action")
   if (!(await ensurePhone(ctx))) return
   try {
     const userId = ctx.from.id
@@ -1538,6 +1573,7 @@ bot.action("restart_player", async (ctx) => {
 })
 
 bot.action("main_menu", async (ctx) => {
+  console.log("🔘 main_menu action")
   try {
     const userId = ctx.from.id
     clearSession(userId)
@@ -1556,6 +1592,7 @@ bot.action("main_menu", async (ctx) => {
 
 // ================= ADMIN ACTIONS =================
 bot.action(/resolve_(.+)_(\d+)/, async (ctx) => {
+  console.log("🔘 resolve action", ctx.match[1], ctx.match[2])
   try {
     const trackId = ctx.match[1]
     const userId = parseInt(ctx.match[2])
@@ -1588,6 +1625,7 @@ bot.action(/resolve_(.+)_(\d+)/, async (ctx) => {
 })
 
 bot.action(/rate_(.+)_(\d+)_(\d)/, async (ctx) => {
+  console.log("🔘 rate action", ctx.match[1], ctx.match[2], ctx.match[3])
   try {
     const trackId = ctx.match[1]
     const adminId = parseInt(ctx.match[2])
@@ -1613,6 +1651,7 @@ bot.action(/rate_(.+)_(\d+)_(\d)/, async (ctx) => {
 })
 
 bot.action(/reply_(\d+)/, (ctx) => {
+  console.log("🔘 reply action", ctx.match[1])
   try {
     const adminId = ctx.from.id
     if (!ADMIN_IDS.includes(adminId)) {
@@ -1634,6 +1673,7 @@ bot.action(/reply_(\d+)/, (ctx) => {
 
 // ================= COUNTRY SELECTION =================
 bot.action(/player_select_(.+)/, async (ctx) => {
+  console.log("🔘 player_select action", ctx.match[1])
   if (!(await ensurePhone(ctx))) return
   try {
     const country = ctx.match[1]
@@ -1664,6 +1704,7 @@ bot.action(/player_select_(.+)/, async (ctx) => {
 
 // ================= ISSUE TYPE =================
 bot.action("player_issue_deposit", async (ctx) => {
+  console.log("🔘 player_issue_deposit action")
   if (!(await ensurePhone(ctx))) return
   try {
     const session = getSession(ctx.from.id)
@@ -1685,6 +1726,7 @@ bot.action("player_issue_deposit", async (ctx) => {
 })
 
 bot.action("player_issue_withdrawal", async (ctx) => {
+  console.log("🔘 player_issue_withdrawal action")
   if (!(await ensurePhone(ctx))) return
   try {
     const session = getSession(ctx.from.id)
@@ -1707,6 +1749,7 @@ bot.action("player_issue_withdrawal", async (ctx) => {
 
 // ================= PAYMENT SYSTEMS =================
 function showBangladeshPayments(ctx, session) {
+  console.log("🇧🇩 showBangladeshPayments called")
   try {
     session.state = "waiting_payment"
     ctx.editMessageText(
@@ -1733,6 +1776,7 @@ function showBangladeshPayments(ctx, session) {
 }
 
 function showIndiaPayments(ctx, session) {
+  console.log("🇮🇳 showIndiaPayments called")
   try {
     session.state = "waiting_payment"
     ctx.editMessageText(
@@ -1752,6 +1796,7 @@ function showIndiaPayments(ctx, session) {
 
 // ================= PAYMENT SELECTED =================
 bot.action(/pay_(.+)/, async (ctx) => {
+  console.log("🔘 pay action", ctx.match[1])
   if (!(await ensurePhone(ctx))) return
   try {
     const payment = ctx.match[1]
@@ -1768,6 +1813,7 @@ bot.action(/pay_(.+)/, async (ctx) => {
 
 // ================= CONFIRMATION =================
 async function showConfirmation(ctx, session) {
+  console.log("✅ showConfirmation called")
   try {
     session.state = "confirm"
 
@@ -1808,6 +1854,7 @@ Is this information correct?`
 
 // ================= SUBMIT =================
 bot.action("submit_player", async (ctx) => {
+  console.log("🔘 submit_player action")
   if (!(await ensurePhone(ctx))) return
   try {
     const session = getSession(ctx.from.id)
@@ -1909,6 +1956,7 @@ Transaction ID: ${safe(session.data.trxId)}`
 
 // ================= TEXT HANDLER =================
 bot.on("text", async (ctx) => {
+  console.log("📝 text received from", ctx.from.id, ":", ctx.message.text)
   try {
     const session = getSession(ctx.from.id)
     const userId = ctx.from.id

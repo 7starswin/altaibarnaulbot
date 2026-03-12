@@ -389,7 +389,7 @@ async function saveSubmission(data) {
   }
 }
 
-// ================= PROMO FLOW FUNCTIONS (NEW) =================
+// ================= PROMO FLOW FUNCTIONS =================
 async function startPromoLanguageSelection(ctx) {
   try {
     const userId = ctx.from.id
@@ -965,7 +965,7 @@ bot.hears("🎨 Generate Promo", async (ctx) => {
   }
 })
 
-// ================= TEXT HANDLER (includes promo code waiting) =================
+// ================= TEXT HANDLER =================
 bot.on("text", async (ctx) => {
   try {
     const session = getSession(ctx.from.id)
@@ -1060,7 +1060,7 @@ bot.on("text", async (ctx) => {
       return
     }
 
-    // SUPPORT FLOW (Player Support)
+    // SUPPORT FLOW
     if (session.state === "waiting_game_user_id") {
       session.data.gameUserId = ctx.message.text
       session.state = "waiting_phone_number"
@@ -1139,23 +1139,24 @@ async function deliverPromoMaterials(ctx, session, userId) {
 
         const image = sharp(inputPath)
         const { width, height } = await image.metadata()
+        // Adjust font size as needed
         const fontSize = Math.max(54, Math.min(width * 0.091, 115))
 
+        // ===== IMPORTANT: Adjust x and y to match your banner's promo box =====
         const textSvg = `
-  <svg width="${width}" height="${height}">
-    <text 
-      x="50%"          // change this to your exact horizontal position (e.g., "30%")
-      y="85%"          // change this to your exact vertical position
-      text-anchor="middle" 
-      font-family="Arzo, 'Arial Black', Impact, sans-serif"
-      font-size="${fontSize}" 
-      font-weight="900"
-      fill="#ff00a2" 
-      letter-spacing="2px"
-      text-transform="uppercase"
-    >${promoCode}</text>
-  </svg>
-`
+          <svg width="${width}" height="${height}">
+            <text 
+              x="50%" 
+              y="85%" 
+              text-anchor="middle" 
+              font-family="Arzo, 'Arial Black', Impact, sans-serif"
+              font-size="${fontSize}" 
+              font-weight="900"
+              fill="#ff00a2" 
+              letter-spacing="2px"
+              text-transform="uppercase"
+            >${promoCode}</text>
+          </svg>
         `
 
         await image
@@ -1245,6 +1246,221 @@ async function deliverPromoMaterials(ctx, session, userId) {
   }
 }
 
+// ================= FILE HANDLER =================
+bot.on(["photo", "video"], async (ctx) => {
+  try {
+    const session = getSession(ctx.from.id)
+    const userId = ctx.from.id
+
+    if (!ADMIN_IDS.includes(userId) && !session.state) {
+      const adminId = userLastAdmin[userId]
+      if (adminId) {
+        const caption = `📎 File from user ${displayUser(ctx)}`
+        if (ctx.message.photo) {
+          const fileId = ctx.message.photo.pop().file_id
+          bot.telegram.sendPhoto(adminId, fileId, {
+            caption,
+            reply_markup: {
+              inline_keyboard: [[{ text: "💬 Reply to user", callback_data: `reply_${userId}` }]]
+            }
+          }).catch(() => {
+            ctx.reply("Sorry, we couldn't deliver your file. Please try again later.")
+          })
+        } else if (ctx.message.video) {
+          const fileId = ctx.message.video.file_id
+          bot.telegram.sendVideo(adminId, fileId, {
+            caption,
+            reply_markup: {
+              inline_keyboard: [[{ text: "💬 Reply to user", callback_data: `reply_${userId}` }]]
+            }
+          }).catch(() => {
+            ctx.reply("Sorry, we couldn't deliver your file. Please try again later.")
+          })
+        }
+        ctx.reply("✅ Your file has been sent to the support team.")
+      } else {
+        ctx.reply("You don't have an ongoing conversation. Please start a new support ticket using the menu.")
+      }
+      return
+    }
+
+    if (session.state !== "waiting_file") return
+
+    if (ctx.message.photo) {
+      session.data.fileId = ctx.message.photo.pop().file_id
+      session.data.fileType = "photo"
+      session.data.fileName = "screenshot.jpg"
+    } else if (ctx.message.video) {
+      session.data.fileId = ctx.message.video.file_id
+      session.data.fileType = "video"
+      session.data.fileName = "video.mp4"
+    }
+
+    ctx.reply("File uploaded successfully!")
+    showConfirmation(ctx, session)
+  } catch (err) {
+    console.error("Error in file handler:", err)
+  }
+})
+
+// ================= CALENDAR =================
+function showCalendar(ctx, session) {
+  try {
+    let year = session.calendar.year
+    let month = session.calendar.month
+
+    const monthNames = ["January", "February", "March", "April", "May", "June",
+      "July", "August", "September", "October", "November", "December"]
+
+    const firstDay = new Date(year, month, 1).getDay()
+    const daysInMonth = new Date(year, month + 1, 0).getDate()
+
+    let buttons = []
+    let row = []
+
+    for (let i = 0; i < firstDay; i++) {
+      row.push(Markup.button.callback(" ", "ignore"))
+    }
+
+    for (let d = 1; d <= daysInMonth; d++) {
+      row.push(Markup.button.callback(d.toString(), `date_${d}`))
+      if (row.length === 7) {
+        buttons.push(row)
+        row = []
+      }
+    }
+    if (row.length > 0) {
+      while (row.length < 7) {
+        row.push(Markup.button.callback(" ", "ignore"))
+      }
+      buttons.push(row)
+    }
+
+    buttons.push([
+      Markup.button.callback("◀ Prev", "prev_month"),
+      Markup.button.callback(`${monthNames[month]} ${year}`, "ignore"),
+      Markup.button.callback("Next ▶", "next_month")
+    ])
+    buttons.push([Markup.button.callback("Main Menu", "main_menu")])
+
+    ctx.reply(
+      `📅 Select Date\nCurrent Month: ${monthNames[month]} ${year}`,
+      Markup.inlineKeyboard(buttons)
+    )
+  } catch (err) {
+    console.error("Error in showCalendar:", err)
+  }
+}
+
+bot.action(/date_(\d+)/, async (ctx) => {
+  if (!(await ensurePhone(ctx))) return
+  try {
+    const day = ctx.match[1]
+    const session = getSession(ctx.from.id)
+    const year = session.calendar.year
+    const month = session.calendar.month
+    const selectedDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+    session.data.selectedDate = selectedDate
+    session.state = "waiting_time"
+    await ctx.editMessageText(`Selected date: ${selectedDate}\n\nPlease enter time in any format:`)
+    await ctx.answerCbQuery().catch(() => {})
+  } catch (err) {
+    console.error("Error in date action:", err)
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+  }
+})
+
+bot.action("prev_month", async (ctx) => {
+  if (!(await ensurePhone(ctx))) return
+  try {
+    const session = getSession(ctx.from.id)
+    let { year, month } = session.calendar
+    if (month === 0) {
+      month = 11
+      year -= 1
+    } else {
+      month -= 1
+    }
+    session.calendar = { year, month }
+    showCalendar(ctx, session)
+    await ctx.answerCbQuery().catch(() => {})
+  } catch (err) {
+    console.error("Error in prev_month action:", err)
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+  }
+})
+
+bot.action("next_month", async (ctx) => {
+  if (!(await ensurePhone(ctx))) return
+  try {
+    const session = getSession(ctx.from.id)
+    let { year, month } = session.calendar
+    if (month === 11) {
+      month = 0
+      year += 1
+    } else {
+      month += 1
+    }
+    session.calendar = { year, month }
+    showCalendar(ctx, session)
+    await ctx.answerCbQuery().catch(() => {})
+  } catch (err) {
+    console.error("Error in next_month action:", err)
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+  }
+})
+
+bot.action("ignore", async (ctx) => {
+  try {
+    await ctx.answerCbQuery().catch(() => {})
+  } catch (err) {
+    console.error("Error in ignore action:", err)
+  }
+})
+
+// ================= RESTART / MAIN MENU =================
+bot.action("restart_player", async (ctx) => {
+  if (!(await ensurePhone(ctx))) return
+  try {
+    const userId = ctx.from.id
+    clearSession(userId)
+    const session = getSession(userId)
+    session.state = "player_country_selection"
+    session.data.type = "player"
+    await ctx.editMessageText(
+      "👤 Player Support\n\nWhere are you from?",
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback("🇧🇩 Bangladesh", "player_select_bangladesh"),
+          Markup.button.callback("🇮🇳 India", "player_select_india")
+        ],
+        [Markup.button.callback("« Back", "main_menu")]
+      ])
+    )
+    await ctx.answerCbQuery().catch(() => {})
+  } catch (err) {
+    console.error("Error in restart_player action:", err)
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+  }
+})
+
+bot.action("main_menu", async (ctx) => {
+  try {
+    const userId = ctx.from.id
+    clearSession(userId)
+    await ctx.deleteMessage().catch(() => {})
+    if (ADMIN_IDS.includes(userId)) {
+      await ctx.reply("Admin menu:", adminMenu())
+    } else {
+      await ctx.reply("Main menu:", userMenu())
+    }
+    await ctx.answerCbQuery().catch(() => {})
+  } catch (err) {
+    console.error("Error in main_menu action:", err)
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+  }
+})
+
 // ================= ADMIN USERS SUBMENU =================
 bot.hears("👥 Users", async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
@@ -1327,7 +1543,7 @@ bot.action(/broadcast_(.+)/, async (ctx) => {
   await ctx.answerCbQuery().catch(() => {})
 })
 
-// ================= ADMIN MENU REGEX HANDLER (remaining buttons) =================
+// ================= ADMIN MENU REGEX HANDLER =================
 bot.hears(/^(.*Deposit Problems.*|.*Withdrawal Problems.*|.*Agent Requests.*|.*Promo Activity.*)$/, async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
   try {
@@ -1366,11 +1582,463 @@ bot.hears(/^(.*Deposit Problems.*|.*Withdrawal Problems.*|.*Agent Requests.*|.*P
   }
 })
 
-// ================= CALENDAR, FILE HANDLER, and other existing functions remain unchanged =================
-// (Include all the calendar, file handler, payment systems, ticket list functions from previous version)
-// For brevity, I'll include placeholders – but in the final answer, I'll provide the full code with all functions.
+// ================= ADMIN ACTIONS =================
+bot.action(/resolve_(.+)_(\d+)/, async (ctx) => {
+  try {
+    const trackId = ctx.match[1]
+    const userId = parseInt(ctx.match[2])
+    const adminId = ctx.from.id
 
-// ... (All previous calendar, file handler, payment, submit, etc. functions go here. They are unchanged from the last version.)
+    const ticketIndex = pendingTickets.findIndex(t => t.trackId === trackId)
+    if (ticketIndex !== -1) {
+      pendingTickets.splice(ticketIndex, 1)
+      saveTickets()
+    }
+
+    await ctx.answerCbQuery("Ticket marked resolved")
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] })
+
+    await bot.telegram.sendMessage(
+      userId,
+      `✅ Your request ${trackId} has been resolved.\n\nPlease rate your experience:`,
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback("1⭐ Best", `rate_${trackId}_${adminId}_1`),
+          Markup.button.callback("2⭐ Good", `rate_${trackId}_${adminId}_2`),
+          Markup.button.callback("3⭐ Poor", `rate_${trackId}_${adminId}_3`),
+        ]
+      ])
+    )
+  } catch (error) {
+    console.error("Error in resolve action:", error)
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+  }
+})
+
+bot.action(/rate_(.+)_(\d+)_(\d)/, async (ctx) => {
+  try {
+    const trackId = ctx.match[1]
+    const adminId = parseInt(ctx.match[2])
+    const rating = ctx.match[3]
+    const userId = ctx.from.id
+
+    let ratingText = ""
+    if (rating === "1") ratingText = "1⭐ Best"
+    else if (rating === "2") ratingText = "2⭐ Good"
+    else if (rating === "3") ratingText = "3⭐ Poor"
+
+    await bot.telegram.sendMessage(
+      adminId,
+      `📊 User ${displayUser(ctx)} rated request ${trackId} as: ${ratingText}`
+    )
+
+    await ctx.editMessageText("Thank you for your feedback! 🙏")
+    await ctx.answerCbQuery()
+  } catch (error) {
+    console.error("Error in rate action:", error)
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+  }
+})
+
+bot.action(/reply_(\d+)/, (ctx) => {
+  try {
+    const adminId = ctx.from.id
+    if (!ADMIN_IDS.includes(adminId)) {
+      return ctx.answerCbQuery("You are not authorized")
+    }
+
+    const targetUserId = parseInt(ctx.match[1])
+    const session = getSession(adminId)
+    session.state = "admin_reply"
+    session.data.targetUserId = targetUserId
+
+    ctx.answerCbQuery()
+    ctx.reply("✏️ Please type your reply message below. It will be sent to the user.")
+  } catch (err) {
+    console.error("Error in reply action:", err)
+    try { ctx.answerCbQuery().catch(() => {}) } catch {}
+  }
+})
+
+// ================= COUNTRY SELECTION =================
+bot.action(/player_select_(.+)/, async (ctx) => {
+  if (!(await ensurePhone(ctx))) return
+  try {
+    const country = ctx.match[1]
+    const session = getSession(ctx.from.id)
+    if (session.processing) return
+    session.processing = true
+
+    session.data.country = country
+    session.state = "player_issue_selection"
+
+    await ctx.editMessageText(
+      `🌍 Player Support - ${country}\n\nWhat issue type?`,
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback("Deposit", "player_issue_deposit"),
+          Markup.button.callback("Withdrawal", "player_issue_withdrawal")
+        ],
+        [Markup.button.callback("← Back", "main_menu")]
+      ])
+    )
+    session.processing = false
+    await ctx.answerCbQuery().catch(() => {})
+  } catch (err) {
+    console.error("Error in player_select action:", err)
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+  }
+})
+
+// ================= ISSUE TYPE =================
+bot.action("player_issue_deposit", async (ctx) => {
+  if (!(await ensurePhone(ctx))) return
+  try {
+    const session = getSession(ctx.from.id)
+    session.data.issueType = "Deposit"
+    session.data.category = "deposit"
+
+    if (session.data.country === "bangladesh") {
+      return showBangladeshPayments(ctx, session)
+    }
+    if (session.data.country === "india") {
+      return showIndiaPayments(ctx, session)
+    }
+    ctx.reply("Please select a country first.")
+    await ctx.answerCbQuery().catch(() => {})
+  } catch (err) {
+    console.error("Error in player_issue_deposit action:", err)
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+  }
+})
+
+bot.action("player_issue_withdrawal", async (ctx) => {
+  if (!(await ensurePhone(ctx))) return
+  try {
+    const session = getSession(ctx.from.id)
+    session.data.issueType = "Withdrawal"
+    session.data.category = "withdrawal"
+
+    if (session.data.country === "bangladesh") {
+      return showBangladeshPayments(ctx, session)
+    }
+    if (session.data.country === "india") {
+      return showIndiaPayments(ctx, session)
+    }
+    ctx.reply("Please select a country first.")
+    await ctx.answerCbQuery().catch(() => {})
+  } catch (err) {
+    console.error("Error in player_issue_withdrawal action:", err)
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+  }
+})
+
+// ================= PAYMENT SYSTEMS =================
+function showBangladeshPayments(ctx, session) {
+  try {
+    session.state = "waiting_payment"
+    ctx.editMessageText(
+      "🇧🇩 Bangladesh Payment Systems",
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback("bKash", "pay_bkash"),
+          Markup.button.callback("Nagad", "pay_nagad")
+        ],
+        [
+          Markup.button.callback("Rocket", "pay_rocket"),
+          Markup.button.callback("Upay", "pay_upay")
+        ],
+        [
+          Markup.button.callback("MoneyGo", "pay_moneygo"),
+          Markup.button.callback("Binance", "pay_binance")
+        ],
+        [Markup.button.callback("Main Menu", "main_menu")]
+      ])
+    )
+  } catch (err) {
+    console.error("Error in showBangladeshPayments:", err)
+  }
+}
+
+function showIndiaPayments(ctx, session) {
+  try {
+    session.state = "waiting_payment"
+    ctx.editMessageText(
+      "🇮🇳 India Payment Systems",
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback("PhonePe", "pay_phonepe"),
+          Markup.button.callback("PayTM UPI", "pay_paytm")
+        ],
+        [Markup.button.callback("Main Menu", "main_menu")]
+      ])
+    )
+  } catch (err) {
+    console.error("Error in showIndiaPayments:", err)
+  }
+}
+
+// ================= PAYMENT SELECTED =================
+bot.action(/pay_(.+)/, async (ctx) => {
+  if (!(await ensurePhone(ctx))) return
+  try {
+    const payment = ctx.match[1]
+    const session = getSession(ctx.from.id)
+    session.data.paymentSystem = payment
+    session.state = "waiting_game_user_id"
+    await ctx.reply("Enter User ID (numbers only):")
+    await ctx.answerCbQuery().catch(() => {})
+  } catch (err) {
+    console.error("Error in pay action:", err)
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+  }
+})
+
+// ================= CONFIRMATION =================
+async function showConfirmation(ctx, session) {
+  try {
+    session.state = "confirm"
+
+    const summary = `📋 Confirm Your Details
+
+country: ${safe(session.data.country)}
+issueType: ${safe(session.data.issueType)}
+paymentSystem: ${safe(session.data.paymentSystem)}
+gameUserId: ${safe(session.data.gameUserId)}
+phoneNumber: ${safe(session.data.phoneNumber)}
+agentNumber: ${safe(session.data.agentNumber)}
+selectedDate: ${safe(session.data.selectedDate)}
+selectedTime: ${safe(session.data.selectedTime)}
+amount: ${safe(session.data.amount)}
+trxId: ${safe(session.data.trxId)}
+fileName: ${safe(session.data.fileName)}
+
+Is this information correct?`
+
+    if (session.data.fileType === "photo") {
+      await ctx.replyWithPhoto(session.data.fileId, { caption: summary })
+    } else {
+      await ctx.replyWithVideo(session.data.fileId, { caption: summary })
+    }
+
+    await ctx.reply(
+      "Please confirm:",
+      Markup.inlineKeyboard([
+        [Markup.button.callback("Submit", "submit_player")],
+        [Markup.button.callback("Restart", "restart_player")],
+        [Markup.button.callback("Main Menu", "main_menu")]
+      ])
+    )
+  } catch (err) {
+    console.error("Error in showConfirmation:", err)
+  }
+}
+
+// ================= SUBMIT =================
+bot.action("submit_player", async (ctx) => {
+  if (!(await ensurePhone(ctx))) return
+  try {
+    const session = getSession(ctx.from.id)
+    if (session.submitting) return
+    session.submitting = true
+
+    if (!session.data.fileId || !session.data.fileType) {
+      ctx.reply("❌ Error: No file uploaded. Please restart the process.")
+      clearSession(ctx.from.id)
+      return
+    }
+
+    const trackId = generateTrackId()
+    const userId = ctx.from.id
+    const username = ctx.from.username || null
+
+    const ticket = {
+      trackId,
+      userId,
+      username,
+      category: session.data.category,
+      data: { ...session.data },
+      status: "open",
+      timestamp: Date.now()
+    }
+    pendingTickets.push(ticket)
+    saveTickets()
+
+    // Mark user as player
+    await updateUser(userId, { isPlayer: true })
+
+    const message = `🎫 Player Request\nTrack ID: ${trackId}
+
+User: ${ctx.from.first_name} ${username ? `(@${username})` : "(no username)"}
+Telegram ID: ${userId}
+
+Country: ${safe(session.data.country)}
+Issue: ${safe(session.data.issueType)}
+Payment: ${safe(session.data.paymentSystem)}
+Game User ID: ${safe(session.data.gameUserId)}
+Phone Number: ${safe(session.data.phoneNumber)}
+Agent Number: ${safe(session.data.agentNumber)}
+Date: ${safe(session.data.selectedDate)}
+Time: ${safe(session.data.selectedTime)}
+Amount: ${safe(session.data.amount)}
+Transaction ID: ${safe(session.data.trxId)}`
+
+    for (const admin of ADMIN_IDS) {
+      try {
+        if (session.data.fileType === "photo") {
+          await bot.telegram.sendPhoto(
+            admin,
+            session.data.fileId,
+            {
+              caption: message,
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: "💬 Reply", callback_data: `reply_${userId}` },
+                    { text: "✅ Resolved", callback_data: `resolve_${trackId}_${userId}` }
+                  ]
+                ]
+              }
+            }
+          )
+        } else {
+          await bot.telegram.sendVideo(
+            admin,
+            session.data.fileId,
+            {
+              caption: message,
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: "💬 Reply", callback_data: `reply_${userId}` },
+                    { text: "✅ Resolved", callback_data: `resolve_${trackId}_${userId}` }
+                  ]
+                ]
+              }
+            }
+          )
+        }
+      } catch (error) {
+        console.error(`Failed to send ticket to admin ${admin}:`, error)
+      }
+    }
+
+    ctx.reply(
+      `✅ Request registered\nTrack ID: ${trackId}\n\nAdmin team will respond shortly.`,
+      userMenu()
+    )
+
+    clearSession(ctx.from.id)
+    await ctx.answerCbQuery().catch(() => {})
+  } catch (err) {
+    console.error("Error in submit_player action:", err)
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+  }
+})
+
+// ================= TICKET LIST DISPLAY FUNCTION =================
+function showTicketList(ctx, category, page) {
+  try {
+    const tickets = pendingTickets.filter(t => t.category === category && t.status === "open")
+    const pageSize = 5
+    const totalPages = Math.ceil(tickets.length / pageSize) || 1
+    const start = page * pageSize
+    const end = start + pageSize
+    const pageTickets = tickets.slice(start, end)
+
+    if (tickets.length === 0) {
+      ctx.reply(`No open ${category} tickets.`)
+      return
+    }
+
+    const buttons = []
+    pageTickets.forEach(t => {
+      const username = t.username ? `@${t.username}` : `ID: ${t.userId}`
+      buttons.push([Markup.button.callback(
+        `${t.trackId} - ${username}`,
+        `view_${category}_${t.trackId}`
+      )])
+    })
+
+    const nav = []
+    if (page > 0) {
+      nav.push(Markup.button.callback("« Previous", `${category}_page_${page - 1}`))
+    }
+    nav.push(Markup.button.callback(`Page ${page+1}/${totalPages}`, "ignore"))
+    if (page < totalPages - 1) {
+      nav.push(Markup.button.callback("Next »", `${category}_page_${page + 1}`))
+    }
+    buttons.push(nav)
+    buttons.push([Markup.button.callback("🔙 Main Menu", "main_menu")])
+
+    ctx.reply(
+      `📋 Open ${category === "deposit" ? "Deposit" : "Withdrawal"} Tickets:`,
+      Markup.inlineKeyboard(buttons)
+    )
+  } catch (err) {
+    console.error("Error in showTicketList:", err)
+  }
+}
+
+bot.action(/^(deposit|withdrawal)_page_(\d+)$/, async (ctx) => {
+  try {
+    const category = ctx.match[1]
+    const page = parseInt(ctx.match[2])
+    showTicketList(ctx, category, page)
+    await ctx.answerCbQuery().catch(() => {})
+  } catch (err) {
+    console.error("Error in pagination action:", err)
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+  }
+})
+
+bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
+  try {
+    const category = ctx.match[1]
+    const trackId = ctx.match[2]
+    const ticket = pendingTickets.find(t => t.trackId === trackId && t.status === "open")
+    if (!ticket) {
+      await ctx.answerCbQuery("Ticket not found or already resolved.")
+      return ctx.editMessageText("Ticket not found.")
+    }
+
+    const data = ticket.data
+    const user = ticket.username ? `@${ticket.username}` : `ID: ${ticket.userId}`
+    const details = `🎫 **Ticket ${trackId}**
+
+**User:** ${user}
+**Country:** ${safe(data.country)}
+**Issue:** ${safe(data.issueType)}
+**Payment:** ${safe(data.paymentSystem)}
+**Game User ID:** ${safe(data.gameUserId)}
+**Phone:** ${safe(data.phoneNumber)}
+**Agent:** ${safe(data.agentNumber)}
+**Date:** ${safe(data.selectedDate)}
+**Time:** ${safe(data.selectedTime)}
+**Amount:** ${safe(data.amount)}
+**Trx ID:** ${safe(data.trxId)}
+**File:** ${safe(data.fileName)}`
+
+    await ctx.editMessageText(details, {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "💬 Reply", callback_data: `reply_${ticket.userId}` },
+            { text: "✅ Resolve", callback_data: `resolve_${trackId}_${ticket.userId}` }
+          ],
+          [
+            { text: "🔙 Back to list", callback_data: `${category}_page_0` }
+          ]
+        ]
+      }
+    })
+    await ctx.answerCbQuery().catch(() => {})
+  } catch (err) {
+    console.error("Error in view ticket action:", err)
+    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+  }
+})
 
 // ================= GLOBAL ERROR HANDLER =================
 process.on('unhandledRejection', (error) => {
@@ -1383,4 +2051,4 @@ process.on('uncaughtException', (error) => {
 
 // ================= START BOT =================
 bot.launch()
-console.log("🚀 Bot Running with 6 Languages & Promo Categories")
+console.log("🚀 Bot Running with 6 Languages, 4 Categories & Custom Text Style")

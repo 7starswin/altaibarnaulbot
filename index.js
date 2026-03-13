@@ -149,6 +149,15 @@ async function getAllUserIds() {
   return users.map(u => u.userId)
 }
 
+// New function for all users (no flag)
+async function getAllUsers() {
+  return await User.find({}).sort({ createdAt: -1 }).limit(10)
+}
+
+async function countAllUsers() {
+  return await User.countDocuments({})
+}
+
 // ================= CHECK PHONE =================
 async function ensurePhone(ctx) {
   const userId = ctx.from.id
@@ -250,7 +259,7 @@ const countryConfig = {
   },
   pakistan: {
     depositCommission: "8%",
-    withdrawalCommission: "2",
+    withdrawalCommission: "2%",
     prepay: "$50 (refundable)"
   },
   egypt: {
@@ -358,7 +367,6 @@ function loadLanguage(lang) {
 
 // ================= PROMO FLOW FUNCTIONS =================
 async function startPromoLanguageSelection(ctx) {
-  console.log("📢 startPromoLanguageSelection called")
   try {
     const userId = ctx.from.id
     const session = getSession(userId)
@@ -389,7 +397,6 @@ async function startPromoLanguageSelection(ctx) {
 }
 
 bot.action(/promo_lang_(.+)/, async (ctx) => {
-  console.log("🔘 promo_lang action triggered with", ctx.match[1])
   if (!(await ensurePhone(ctx))) return
   try {
     const lang = ctx.match[1]
@@ -425,7 +432,6 @@ bot.action(/promo_lang_(.+)/, async (ctx) => {
 })
 
 bot.action(/promo_cat_(.+)/, async (ctx) => {
-  console.log("🔘 promo_cat action triggered with", ctx.match[1])
   if (!(await ensurePhone(ctx))) return
   try {
     const category = ctx.match[1] // cricket, football, matchday, video, all
@@ -435,7 +441,6 @@ bot.action(/promo_cat_(.+)/, async (ctx) => {
 
     session.data.promoCategory = category
     session.state = "waiting_promo_code"
-    console.log("   State set to waiting_promo_code for user", userId)
 
     await ctx.editMessageText(
       `✏️ **${texts.type_your_promo}**\n\n${texts.enter_promo_code_message}`,
@@ -450,7 +455,6 @@ bot.action(/promo_cat_(.+)/, async (ctx) => {
 
 // ================= AGENT FLOW FUNCTIONS =================
 async function agentFlow(ctx) {
-  console.log("👤 agentFlow called")
   try {
     const userId = ctx.from.id
     const session = getSession(userId)
@@ -483,7 +487,6 @@ async function agentFlow(ctx) {
 }
 
 async function showAgentDetails(ctx, country) {
-  console.log("📋 showAgentDetails for", country)
   try {
     const userId = ctx.from.id
     const session = getSession(userId)
@@ -524,7 +527,6 @@ async function showAgentDetails(ctx, country) {
 }
 
 async function showAgentConfirmation(ctx, country) {
-  console.log("✅ showAgentConfirmation for", country)
   try {
     const userId = ctx.from.id
     const session = getSession(userId)
@@ -572,7 +574,6 @@ async function showAgentConfirmation(ctx, country) {
 }
 
 async function handleAgentResponse(ctx, country, response) {
-  console.log("📬 handleAgentResponse", country, response)
   try {
     const userId = ctx.from.id
     const session = getSession(userId)
@@ -979,8 +980,14 @@ bot.action(/broadcast_(.+)/, async (ctx) => {
 async function showUserList(ctx, flag, displayName) {
   console.log("📋 showUserList for", displayName)
   try {
-    const usersList = await getUsersByFlag(flag)
-    const total = await countUsersByFlag(flag)
+    let usersList, total
+    if (flag === 'all') {
+      usersList = await getAllUsers()
+      total = await countAllUsers()
+    } else {
+      usersList = await getUsersByFlag(flag)
+      total = await countUsersByFlag(flag)
+    }
 
     let msg = `<b>👥 ${displayName}</b> (Total: ${total})\n\n`
     if (usersList.length === 0) {
@@ -1015,6 +1022,13 @@ bot.action("show_agents", async (ctx) => {
   console.log("🔘 show_agents action")
   if (!ADMIN_IDS.includes(ctx.from.id)) return
   await showUserList(ctx, 'isAgent', 'Agents')
+})
+
+// New action for All Users
+bot.action("show_all_users", async (ctx) => {
+  console.log("🔘 show_all_users action")
+  if (!ADMIN_IDS.includes(ctx.from.id)) return
+  await showUserList(ctx, 'all', 'All Users')
 })
 
 // ================= TICKET LIST FUNCTIONS =================
@@ -1351,7 +1365,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
   }
 }
 
-// ================= FILE HANDLER (for user uploads) =================
+// ================= FILE HANDLER (for user uploads and broadcast) =================
 bot.on(["photo", "video"], async (ctx) => {
   console.log("📎 file received from", ctx.from.id)
   try {
@@ -2148,6 +2162,7 @@ bot.on("text", async (ctx) => {
             [Markup.button.callback("👥 Players", "show_players")],
             [Markup.button.callback("👥 Affiliates", "show_affiliates")],
             [Markup.button.callback("👥 Agents", "show_agents")],
+            [Markup.button.callback("👥 All Users", "show_all_users")],
             [Markup.button.callback("🔙 Back to Admin Menu", "main_menu")]
           ])
         )

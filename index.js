@@ -5,11 +5,19 @@ const path = require("path")
 const { Telegraf, Markup } = require("telegraf")
 const sharp = require("sharp")
 const mongoose = require("mongoose")
-const ffmpeg = require('fluent-ffmpeg')
-const ffmpegStatic = require('ffmpeg-static')
 
-// Set ffmpeg path
-ffmpeg.setFfmpegPath(ffmpegStatic)
+// ================= OPTIONAL FFMPEG =================
+let hasFfmpeg = false
+let ffmpeg, ffmpegStatic
+try {
+  ffmpeg = require('fluent-ffmpeg')
+  ffmpegStatic = require('ffmpeg-static')
+  if (ffmpegStatic) ffmpeg.setFfmpegPath(ffmpegStatic)
+  hasFfmpeg = true
+  console.log("✅ ffmpeg loaded – video overlay enabled")
+} catch (err) {
+  console.log("⚠️ ffmpeg not installed – videos will be sent without overlay")
+}
 
 // ================= MONGODB CONNECTION =================
 const MONGODB_URI = process.env.MONGODB_URI
@@ -342,6 +350,7 @@ const translations = {
     no_banners_available: "No banners available for {language}/{category}.",
     processing_banners: "Processing {count} banners with promo '{promo}' in {language}/{category}...",
     processing_videos: "Processing videos with text overlay (this may take a moment)...",
+    ffmpeg_missing: "⚠️ Video overlay requires additional packages. Videos will be sent without promo code.",
     complete: "Complete",
     banners_delivered_success: "✅ {count} banners delivered with your promo code '{promo}' in {language}/{category}!",
     banners_delivered_with_failures: "✅ {count} banners delivered with promo '{promo}' in {language}/{category}. Failed: {failed}",
@@ -875,13 +884,9 @@ bot.action("affiliate_manager", async (ctx) => {
 bot.action(/manager_country_(.+)/, async (ctx) => {
   console.log("🔘 manager_country action triggered with", ctx.match[1])
   try {
-    // First answer callback to prevent timeout
     await ctx.answerCbQuery().catch(() => {})
 
-    // Check phone (they should have it from affiliate_manager)
-    if (!(await ensurePhone(ctx))) {
-      return
-    }
+    if (!(await ensurePhone(ctx))) return
 
     const country = ctx.match[1]
     const texts = loadLanguage("en")
@@ -902,7 +907,6 @@ bot.action(/manager_country_(.+)/, async (ctx) => {
       `You can feel free to contact this manager anytime for assistance. They will help you with any questions regarding promotions, commissions, and account management.\n\n` +
       `${texts.click_button_to_contact}`
 
-    // Try to edit the original message; if it fails, send a new message
     try {
       await ctx.editMessageText(
         message,
@@ -1178,16 +1182,18 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
   }
 })
 
-// ================= VIDEO TEXT OVERLAY FUNCTION =================
+// ================= VIDEO TEXT OVERLAY FUNCTION (FALLBACK SAFE) =================
 async function addTextToVideo(inputPath, outputPath, text) {
+  if (!hasFfmpeg) {
+    throw new Error("ffmpeg not available – cannot overlay text on video")
+  }
   return new Promise((resolve, reject) => {
-    // Create a temporary image for the text overlay
     const tempImagePath = path.join(path.dirname(outputPath), 'temp_overlay.png')
     
-    // First, create an image with the text using sharp (same style as for banners)
+    // Create a transparent image with the text using sharp
     sharp({
       create: {
-        width: 100, // will be scaled
+        width: 100,
         height: 100,
         channels: 4,
         background: { r: 0, g: 0, b: 0, alpha: 0 }
@@ -1217,27 +1223,25 @@ async function addTextToVideo(inputPath, outputPath, text) {
     .png()
     .toFile(tempImagePath)
     .then(() => {
-      // Now use ffmpeg to overlay the image on the video
       ffmpeg(inputPath)
         .input(tempImagePath)
         .complexFilter([
           {
             filter: 'scale',
-            options: 'iw:ih', // scale image to video size? actually we want to overlay at specific position
+            options: 'iw:ih',
             inputs: '1:v',
             outputs: 'scaled'
           },
           {
             filter: 'overlay',
-            options: '10:10', // position: adjust as needed (x:y)
+            options: '10:10',
             inputs: ['0:v', 'scaled'],
             outputs: 'overlayed'
           }
         ])
         .outputOptions('-map', 'overlayed')
-        .outputOptions('-map', '0:a?') // copy audio if present
+        .outputOptions('-map', '0:a?')
         .on('end', () => {
-          // Clean up temp image
           fs.unlink(tempImagePath).catch(() => {})
           resolve()
         })
@@ -1312,13 +1316,14 @@ async function deliverPromoMaterials(ctx, session, userId) {
       return
     }
 
-    // Separate images and videos
     const imageFiles = allMediaFiles.filter(m => m.file.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i))
     const videoFiles = allMediaFiles.filter(m => m.file.match(/\.(mp4|mov|avi|mkv)$/i))
 
     await ctx.reply(`📄 Processing ${allMediaFiles.length} banners with promo '${promoCode}' in ${bannerLanguage}/${promoCategory}...`)
-    if (videoFiles.length > 0) {
-      await ctx.reply(texts.processing_videos)
+
+    // If videos are present and ffmpeg is missing, notify user
+    if (videoFiles.length > 0 && !hasFfmpeg) {
+      await ctx.reply(texts.ffmpeg_missing)
     }
 
     const tempFolder = path.join(__dirname, 'temp', userId.toString())
@@ -1384,14 +1389,20 @@ async function deliverPromoMaterials(ctx, session, userId) {
       }
     }
 
-    // Process videos with ffmpeg
+    // Process videos (with ffmpeg if available, otherwise just copy)
     for (const { cat, file } of videoFiles) {
       try {
         const inputPath = path.join(__dirname, 'assets', bannerLanguage, cat, 'banners', file)
         const outputPath = path.join(tempFolder, `${cat}_${promoCode}_${file}`)
 
-        await addTextToVideo(inputPath, outputPath, promoCode)
-        processedMedia.push({ type: 'video', path: outputPath })
+        if (hasFfmpeg) {
+          await addTextToVideo(inputPath, outputPath, promoCode)
+          processedMedia.push({ type: 'video', path: outputPath })
+        } else {
+          // Just copy the file (send without overlay)
+          await fs.copyFile(inputPath, outputPath)
+          processedMedia.push({ type: 'video', path: outputPath })
+        }
         sentCount++
       } catch (err) {
         console.error(`❌ Error processing video ${cat}/${file}:`, err)

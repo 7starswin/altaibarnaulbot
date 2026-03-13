@@ -1337,75 +1337,37 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
   }
 })
 
-// ================= VIDEO TEXT OVERLAY FUNCTION (FALLBACK SAFE) =================
+// ================= VIDEO TEXT OVERLAY FUNCTION (FIXED) =================
 async function addTextToVideo(inputPath, outputPath, text) {
   if (!hasFfmpeg) {
     throw new Error("ffmpeg not available – cannot overlay text on video")
   }
   return new Promise((resolve, reject) => {
-    const tempImagePath = path.join(path.dirname(outputPath), 'temp_overlay.png')
-    
-    sharp({
-      create: {
-        width: 100,
-        height: 100,
-        channels: 4,
-        background: { r: 0, g: 0, b: 0, alpha: 0 }
-      }
-    })
-    .composite([{
-      input: Buffer.from(`
-        <svg width="100" height="100">
-          <text 
-            x="50%" 
-            y="50%" 
-            text-anchor="middle" 
-            font-family="Azo Sans Uber, 'Arial Black', Impact, sans-serif"
-            font-size="20" 
-            font-weight="900"
-            fill="#ff00a2" 
-            stroke="black"
-            stroke-width="2"
-            paint-order="stroke"
-            text-transform="uppercase"
-          >${text}</text>
-        </svg>
-      `),
-      top: 0,
-      left: 0
-    }])
-    .png()
-    .toFile(tempImagePath)
-    .then(() => {
-      ffmpeg(inputPath)
-        .input(tempImagePath)
-        .complexFilter([
-          {
-            filter: 'scale',
-            options: 'iw:ih',
-            inputs: '1:v',
-            outputs: 'scaled'
-          },
-          {
-            filter: 'overlay',
-            options: '10:10',
-            inputs: ['0:v', 'scaled'],
-            outputs: 'overlayed'
-          }
-        ])
-        .outputOptions('-map', 'overlayed')
-        .outputOptions('-map', '0:a?')
-        .on('end', () => {
-          fs.unlink(tempImagePath).catch(() => {})
-          resolve()
-        })
-        .on('error', (err) => {
-          console.error('ffmpeg error:', err)
-          reject(err)
-        })
-        .save(outputPath)
-    })
-    .catch(reject)
+    // Use drawtext filter to overlay text directly
+    // Escape single quotes in text for the filter
+    const escapedText = text.replace(/'/g, "'\\\\''");
+    const fontSize = 48;
+    const fontColor = "#ff00a2";
+    const borderColor = "black";
+    const borderWidth = 2;
+    // Position at bottom center
+    const x = "(w-text_w)/2";
+    const y = "h-text_h-20";
+
+    // Use a generic sans-serif font (system default)
+    const drawtextFilter = `drawtext=text='${escapedText}':fontcolor=${fontColor}:bordercolor=${borderColor}:borderw=${borderWidth}:fontsize=${fontSize}:x=${x}:y=${y}:font='Sans'`;
+
+    ffmpeg(inputPath)
+      .videoFilter(drawtextFilter)
+      .outputOptions('-c:a', 'copy') // copy audio without re-encoding
+      .on('end', () => {
+        resolve()
+      })
+      .on('error', (err) => {
+        console.error('ffmpeg error:', err)
+        reject(err)
+      })
+      .save(outputPath)
   })
 }
 

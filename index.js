@@ -201,7 +201,6 @@ async function ensureFolder(folderPath) {
   }
 }
 
-// Get all media files (images and videos)
 async function getMediaFiles(folderPath) {
   try {
     const files = await fs.readdir(folderPath)
@@ -858,10 +857,15 @@ bot.action("affiliate_manager", async (ctx) => {
   }
 })
 
+// ================= FIXED MANAGER COUNTRY ACTION =================
 bot.action(/manager_country_(.+)/, async (ctx) => {
   console.log("🔘 manager_country action triggered with", ctx.match[1])
-  if (!(await ensurePhone(ctx))) return
+  // Always answer callback to prevent hanging buttons
   try {
+    if (!(await ensurePhone(ctx))) {
+      await ctx.answerCbQuery().catch(() => {});
+      return;
+    }
     const country = ctx.match[1]
     const userId = ctx.from.id
     const texts = loadLanguage("en")
@@ -877,7 +881,6 @@ bot.action(/manager_country_(.+)/, async (ctx) => {
     }
     const countryName = countryNames[country] || country
 
-    // Fixed message with friendly text and direct contact button
     const message = `✅ **${texts.manager_contact_for} ${countryName}**\n\n` +
       `${texts.manager}: ${managerUsername}\n\n` +
       `You can feel free to contact this manager anytime for assistance. They will help you with any questions regarding promotions, commissions, and account management.\n\n` +
@@ -898,7 +901,10 @@ bot.action(/manager_country_(.+)/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => {})
   } catch (err) {
     console.error("Error in manager_country action:", err)
-    try { await ctx.answerCbQuery().catch(() => {}) } catch {}
+    try {
+      await ctx.answerCbQuery("Sorry, an error occurred. Please try again.").catch(() => {});
+      await ctx.reply("❌ An error occurred. Please try again later.").catch(() => {});
+    } catch {}
   }
 })
 
@@ -1141,7 +1147,7 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
   }
 })
 
-// ================= DELIVER PROMO MATERIALS (WITH VIDEO SUPPORT) =================
+// ================= DELIVER PROMO MATERIALS =================
 async function deliverPromoMaterials(ctx, session, userId) {
   console.log("🚀 deliverPromoMaterials started for user", userId)
   try {
@@ -1195,7 +1201,6 @@ async function deliverPromoMaterials(ctx, session, userId) {
       console.log(`   Found ${files.length} files in ${cat}:`, files)
       const withCat = files.map(f => ({ cat, file: f }))
       allMediaFiles = allMediaFiles.concat(withCat)
-      // Check if any video files are present
       if (files.some(f => f.match(/\.(mp4|mov|avi|mkv)$/i))) {
         hasVideos = true
       }
@@ -1207,7 +1212,6 @@ async function deliverPromoMaterials(ctx, session, userId) {
       return
     }
 
-    // If videos are present, inform the user that they will be sent without overlay
     if (hasVideos) {
       await ctx.reply(texts.processing_videos)
     }
@@ -1219,14 +1223,12 @@ async function deliverPromoMaterials(ctx, session, userId) {
 
     let sentCount = 0
     let failedCount = 0
-    const processedMedia = [] // for images we process, for videos we just copy?
+    const processedMedia = []
 
-    // For images, we need to overlay text. For videos, we'll send as is (no overlay)
-    // We'll separate images and videos
     const imageFiles = allMediaFiles.filter(m => m.file.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i))
     const videoFiles = allMediaFiles.filter(m => m.file.match(/\.(mp4|mov|avi|mkv)$/i))
 
-    // Process images with overlay (concurrent)
+    // Process images with overlay
     const concurrencyLimit = 5
     for (let i = 0; i < imageFiles.length; i += concurrencyLimit) {
       const chunk = imageFiles.slice(i, i + concurrencyLimit)
@@ -1282,13 +1284,10 @@ async function deliverPromoMaterials(ctx, session, userId) {
       }
     }
 
-    // For videos, we just use the original file (no overlay)
+    // Videos: just use original files
     for (const { cat, file } of videoFiles) {
       try {
         const inputPath = path.join(__dirname, 'assets', bannerLanguage, cat, 'banners', file)
-        // Copy to temp folder to keep all files together? Not necessary, we can send directly.
-        // But for consistency, we can send directly from original location.
-        // However, the original might be deleted? No, it's read-only. So we can send directly.
         processedMedia.push({ type: 'video', path: inputPath })
         sentCount++
       } catch (err) {
@@ -1306,12 +1305,10 @@ async function deliverPromoMaterials(ctx, session, userId) {
 
     console.log(`✅ Prepared ${processedMedia.length} items for sending...`)
 
-    // Send media – we cannot mix photos and videos in a media group, so send separately
-    // First send all images (in groups of 10)
+    // Send images in groups
     const imageItems = processedMedia.filter(m => m.type === 'photo')
     const videoItems = processedMedia.filter(m => m.type === 'video')
 
-    // Send images in groups
     const groupSize = 10
     for (let i = 0; i < imageItems.length; i += groupSize) {
       const group = imageItems.slice(i, i + groupSize).map(m => m.path)
@@ -1336,7 +1333,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
       await delay(1000)
     }
 
-    // Send videos individually (can't group videos with photos)
+    // Send videos individually
     for (const { path: videoPath } of videoItems) {
       try {
         await ctx.replyWithVideo({ source: videoPath })
@@ -1346,7 +1343,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
       }
     }
 
-    // Cleanup temp files (only the processed images are in temp)
+    // Cleanup temp files (only processed images)
     for (const item of processedMedia) {
       if (item.type === 'photo') {
         try { await fs.unlink(item.path) } catch {}

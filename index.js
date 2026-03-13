@@ -88,6 +88,13 @@ try {
   if (fsSync.existsSync(AGENT_FILE)) {
     const data = fsSync.readFileSync(AGENT_FILE, "utf8")
     agentRequests = JSON.parse(data)
+    // Add status field to old entries if missing
+    agentRequests = agentRequests.map(r => {
+      if (!r.status) {
+        r.status = r.interested ? 'accepted' : 'rejected'; // assume old accepted
+      }
+      return r;
+    });
   }
 } catch (err) {
   console.error("Error loading agent requests:", err)
@@ -258,7 +265,8 @@ async function saveSubmission(data) {
       country: data.data.country,
       response: data.data.response,
       interested: data.data.interested,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      status: 'pending' // new agent requests start as pending
     };
     agentRequests.push(entry);
     saveAgentRequests();
@@ -612,9 +620,7 @@ async function handleAgentResponse(ctx, country, response) {
     const countryName = countryNames[country] || country
     const isInterested = response === 'accept'
 
-    if (isInterested) {
-      await updateUser(userId, { isAgent: true })
-    }
+    // Remove the line that sets isAgent: true – now done after admin approval
 
     await saveSubmission({
       userId,
@@ -635,7 +641,7 @@ async function handleAgentResponse(ctx, country, response) {
       `<b>User ID:</b> ${userId}\n` +
       `<b>Username:</b> ${ctx.from.username ? '@' + ctx.from.username : 'None'}\n` +
       `<b>Country:</b> ${countryName}\n` +
-      `<b>Response:</b> ${isInterested ? '✅ INTERESTED (Accepted)' : '❌ NOT INTERESTED (Rejected)'}\n` +
+      `<b>Response:</b> ${isInterested ? '✅ INTERESTED' : '❌ NOT INTERESTED'}\n` +
       `<b>Date:</b> ${formatDate()}`
 
     for (const adminId of ADMIN_IDS) {
@@ -1074,6 +1080,160 @@ bot.action("show_all_users", async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return
   await showUserList(ctx, 'all', 'All Users')
 })
+
+// ================= AGENT MANAGEMENT ADMIN ACTIONS =================
+bot.action("admin_pending_agents", async (ctx) => {
+  const adminId = ctx.from.id;
+  if (!ADMIN_IDS.includes(adminId)) return ctx.answerCbQuery("Not authorized");
+
+  const pending = agentRequests.filter(r => r.status === 'pending');
+  if (pending.length === 0) {
+    await ctx.editMessageText("No pending agent requests.");
+    return;
+  }
+
+  let msg = "<b>⏳ Pending Agent Requests</b>\n\n";
+  const buttons = [];
+  pending.forEach((req, index) => {
+    const user = req.username ? `@${req.username}` : (req.phone ? `📞 ${req.phone}` : `ID: ${req.userId}`);
+    msg += `${index+1}. ${user} | ${req.country} | ${new Date(req.timestamp).toLocaleString()}\n`;
+    buttons.push([
+      Markup.button.callback(`✅ Approve ${index+1}`, `approve_agent_${req.userId}_${req.timestamp}`),
+      Markup.button.callback(`❌ Reject ${index+1}`, `reject_agent_${req.userId}_${req.timestamp}`)
+    ]);
+  });
+  buttons.push([Markup.button.callback("🔙 Back", "main_menu")]);
+
+  await ctx.editMessageText(msg, {
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: buttons }
+  });
+});
+
+bot.action("admin_accepted_agents", async (ctx) => {
+  const adminId = ctx.from.id;
+  if (!ADMIN_IDS.includes(adminId)) return ctx.answerCbQuery("Not authorized");
+
+  // Get all accepted requests
+  const accepted = agentRequests.filter(r => r.status === 'accepted');
+  // Also get users with isAgent true that might not have a request (legacy)
+  const agentUsers = await User.find({ isAgent: true }, 'userId username phone');
+  
+  let msg = "<b>✅ Accepted Agents</b>\n\n";
+  if (accepted.length === 0 && agentUsers.length === 0) {
+    msg += "No accepted agents.";
+  } else {
+    if (accepted.length > 0) {
+      msg += "<b>From requests:</b>\n";
+      accepted.forEach((req, i) => {
+        const user = req.username ? `@${req.username}` : (req.phone ? `📞 ${req.phone}` : `ID: ${req.userId}`);
+        msg += `${i+1}. ${user} | ${req.country}\n`;
+      });
+    }
+    if (agentUsers.length > 0) {
+      msg += "\n<b>Direct agents:</b>\n";
+      agentUsers.forEach((u, i) => {
+        const user = u.username ? `@${u.username}` : (u.phone ? `📞 ${u.phone}` : `ID: ${u.userId}`);
+        msg += `${i+1}. ${user}\n`;
+      });
+    }
+  }
+  await ctx.editMessageText(msg, {
+    parse_mode: "HTML",
+    reply_markup: {
+      inline_keyboard: [[Markup.button.callback("🔙 Back", "main_menu")]]
+    }
+  });
+});
+
+bot.action(/^approve_agent_(\d+)_(\d+)$/, async (ctx) => {
+  const adminId = ctx.from.id;
+  if (!ADMIN_IDS.includes(adminId)) return ctx.answerCbQuery("Not authorized");
+
+  const userId = parseInt(ctx.match[1]);
+  const timestamp = parseInt(ctx.match[2]);
+
+  // Find the request
+  const requestIndex = agentRequests.findIndex(r => r.userId === userId && r.timestamp === timestamp && r.status === 'pending');
+  if (requestIndex === -1) {
+    await ctx.answerCbQuery("Request not found or already processed.");
+    return;
+  }
+
+  // Update request status
+  agentRequests[requestIndex].status = 'accepted';
+  saveAgentRequests();
+
+  // Set user as agent
+  await updateUser(userId, { isAgent: true });
+
+  // Notify user
+  try {
+    await bot.telegram.sendMessage(
+      userId,
+      "✅ Congratulations! Your agent application has been approved. You now have access to agent features.\n\nUse the /start command to see your new menu."
+    );
+  } catch (err) {
+    console.error("Failed to notify user about approval:", err);
+  }
+
+  await ctx.answerCbQuery("Agent approved successfully.");
+  // Refresh pending list
+  await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); // remove buttons
+  bot.telegram.sendMessage(adminId, "Agent approved. Refreshing list...");
+  // Re-run pending list (or just show updated list)
+  bot.telegram.sendMessage(adminId, "🤝 Agent Management", {
+    reply_markup: {
+      inline_keyboard: [
+        [Markup.button.callback("⏳ Pending Agents", "admin_pending_agents")],
+        [Markup.button.callback("✅ Accepted Agents", "admin_accepted_agents")],
+        [Markup.button.callback("🔙 Back", "main_menu")]
+      ]
+    }
+  });
+});
+
+bot.action(/^reject_agent_(\d+)_(\d+)$/, async (ctx) => {
+  const adminId = ctx.from.id;
+  if (!ADMIN_IDS.includes(adminId)) return ctx.answerCbQuery("Not authorized");
+
+  const userId = parseInt(ctx.match[1]);
+  const timestamp = parseInt(ctx.match[2]);
+
+  const requestIndex = agentRequests.findIndex(r => r.userId === userId && r.timestamp === timestamp && r.status === 'pending');
+  if (requestIndex === -1) {
+    await ctx.answerCbQuery("Request not found or already processed.");
+    return;
+  }
+
+  // Update request status
+  agentRequests[requestIndex].status = 'rejected';
+  saveAgentRequests();
+
+  // Notify user
+  try {
+    await bot.telegram.sendMessage(
+      userId,
+      "❌ Your agent application has been rejected. You can contact support for more information."
+    );
+  } catch (err) {
+    console.error("Failed to notify user about rejection:", err);
+  }
+
+  await ctx.answerCbQuery("Agent rejected.");
+  // Refresh pending list
+  await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+  bot.telegram.sendMessage(adminId, "Agent rejected. Refreshing list...");
+  bot.telegram.sendMessage(adminId, "🤝 Agent Management", {
+    reply_markup: {
+      inline_keyboard: [
+        [Markup.button.callback("⏳ Pending Agents", "admin_pending_agents")],
+        [Markup.button.callback("✅ Accepted Agents", "admin_accepted_agents")],
+        [Markup.button.callback("🔙 Back", "main_menu")]
+      ]
+    }
+  });
+});
 
 // ================= TICKET LIST FUNCTIONS =================
 function showTicketList(ctx, category, page) {
@@ -2367,17 +2527,14 @@ bot.on("text", async (ctx) => {
       } else if (text.includes("Withdrawal Problems")) {
         showTicketList(ctx, "withdrawal", 0)
       } else if (text.includes("Agent Requests")) {
-        if (agentRequests.length === 0) {
-          return ctx.reply("No agent requests yet.")
-        }
-        let msg = "<b>🤝 Agent Requests</b>\n\n"
-        const recent = [...agentRequests].reverse().slice(0, 10)
-        recent.forEach((req, i) => {
-          const user = req.username ? `@${req.username}` : (req.phone ? `📞 ${req.phone}` : `ID: ${req.userId}`)
-          const status = req.interested ? "✅ Accepted" : "❌ Rejected"
-          msg += `${i+1}. ${user} | ${req.country} | ${status} | ${new Date(req.timestamp).toLocaleString()}\n`
-        })
-        ctx.reply(msg, { parse_mode: "HTML" })
+        await ctx.reply(
+          "🤝 Agent Management",
+          Markup.inlineKeyboard([
+            [Markup.button.callback("⏳ Pending Agents", "admin_pending_agents")],
+            [Markup.button.callback("✅ Accepted Agents", "admin_accepted_agents")],
+            [Markup.button.callback("🔙 Back", "main_menu")]
+          ])
+        );
       } else if (text.includes("Broadcast")) {
         const session = getSession(ctx.from.id)
         session.state = "admin_broadcast_category"

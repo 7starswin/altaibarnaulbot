@@ -149,7 +149,6 @@ async function getAllUserIds() {
   return users.map(u => u.userId)
 }
 
-// New function for all users (no flag)
 async function getAllUsers() {
   return await User.find({}).sort({ createdAt: -1 }).limit(10)
 }
@@ -544,7 +543,6 @@ async function showAgentConfirmation(ctx, country) {
     }
     const countryName = countryNames[country] || country
 
-    // Get country-specific commission details
     const config = getCountryConfig(country)
 
     const confirmationMessage = `**${texts.confirm_conditions}** ⭐\n\n` +
@@ -1024,7 +1022,6 @@ bot.action("show_agents", async (ctx) => {
   await showUserList(ctx, 'isAgent', 'Agents')
 })
 
-// New action for All Users
 bot.action("show_all_users", async (ctx) => {
   console.log("🔘 show_all_users action")
   if (!ADMIN_IDS.includes(ctx.from.id)) return
@@ -1161,7 +1158,6 @@ async function deliverPromoMaterials(ctx, session, userId) {
       return
     }
 
-    // Determine which categories to process
     let categories = []
     if (promoCategory === 'all') {
       categories = ['cricket', 'football', 'matchday', 'video']
@@ -1177,12 +1173,10 @@ async function deliverPromoMaterials(ctx, session, userId) {
 
     console.log(`🎯 Processing promo for ${bannerLanguage}/${promoCategory}, categories:`, categories)
 
-    // Collect all image files from all relevant categories
     let allImageFiles = []
     for (const cat of categories) {
       const folderPath = path.join(__dirname, 'assets', bannerLanguage, cat, 'banners')
       console.log(`📁 Checking folder: ${folderPath}`)
-      // Check if folder exists
       try {
         await fs.access(folderPath)
       } catch (e) {
@@ -1211,7 +1205,6 @@ async function deliverPromoMaterials(ctx, session, userId) {
     let failedCount = 0
     const processedImages = []
 
-    // Process images concurrently (limit 5 at a time)
     const concurrencyLimit = 5
     for (let i = 0; i < allImageFiles.length; i += concurrencyLimit) {
       const chunk = allImageFiles.slice(i, i + concurrencyLimit)
@@ -1225,7 +1218,6 @@ async function deliverPromoMaterials(ctx, session, userId) {
           const { width, height } = await image.metadata()
           const fontSize = Math.max(54, Math.min(width * 0.091, 115))
 
-          // ===== ADJUST x AND y TO MATCH YOUR BANNER'S PROMO BOX =====
           const textSvg = `
             <svg width="${width}" height="${height}">
               <text 
@@ -1277,7 +1269,6 @@ async function deliverPromoMaterials(ctx, session, userId) {
 
     console.log(`✅ Generated ${processedImages.length} images, sending...`)
 
-    // Send images – try media group first, fallback to individual sends
     const groupSize = 10
     for (let i = 0; i < processedImages.length; i += groupSize) {
       const group = processedImages.slice(i, i + groupSize)
@@ -1290,7 +1281,6 @@ async function deliverPromoMaterials(ctx, session, userId) {
         console.log(`📤 Sent group of ${group.length} images via media group`)
       } catch (err) {
         console.error('Media group failed, sending individually:', err)
-        // Fallback: send one by one
         for (const imgPath of group) {
           try {
             await ctx.replyWithPhoto({ source: imgPath })
@@ -1303,13 +1293,11 @@ async function deliverPromoMaterials(ctx, session, userId) {
       await delay(1000)
     }
 
-    // Cleanup temp files
     for (const imgPath of processedImages) {
       try { await fs.unlink(imgPath) } catch {}
     }
     try { await fs.rmdir(tempFolder) } catch {}
 
-    // Save promo activity
     promoActivities.push({
       userId,
       username: ctx.from.username,
@@ -1365,14 +1353,13 @@ async function deliverPromoMaterials(ctx, session, userId) {
   }
 }
 
-// ================= FILE HANDLER (for user uploads and broadcast) =================
+// ================= FILE HANDLER =================
 bot.on(["photo", "video"], async (ctx) => {
   console.log("📎 file received from", ctx.from.id)
   try {
     const session = getSession(ctx.from.id)
     const userId = ctx.from.id
 
-    // If this is an admin in broadcast state, handle broadcast file
     if (ADMIN_IDS.includes(userId) && session.state === "admin_broadcast_message") {
       const category = session.broadcastCategory
       const caption = ctx.message.caption || ""
@@ -1412,7 +1399,6 @@ bot.on(["photo", "video"], async (ctx) => {
       return
     }
 
-    // Otherwise, handle normal user file upload in support flow
     if (!ADMIN_IDS.includes(userId) && !session.state) {
       const adminId = userLastAdmin[userId]
       if (adminId) {
@@ -1445,8 +1431,9 @@ bot.on(["photo", "video"], async (ctx) => {
       return
     }
 
-    // Support flow file upload
-    if (session.state !== "waiting_file") return
+    if (session.state !== "waiting_file" &&
+        session.state !== "waiting_binance_file" &&
+        session.state !== "waiting_moneygo_file") return
 
     if (ctx.message.photo) {
       session.data.fileId = ctx.message.photo.pop().file_id
@@ -1525,8 +1512,18 @@ bot.action(/date_(\d+)/, async (ctx) => {
     const month = session.calendar.month
     const selectedDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
     session.data.selectedDate = selectedDate
-    session.state = "waiting_time"
-    await ctx.editMessageText(`Selected date: ${selectedDate}\n\nPlease enter time in any format:`)
+
+    if (session.state === "waiting_binance_date") {
+      session.state = "waiting_binance_file"
+      await ctx.editMessageText(`Selected date: ${selectedDate}\n\nPlease upload a screenshot or video file.`)
+    } else if (session.state === "waiting_moneygo_date") {
+      session.state = "waiting_moneygo_file"
+      await ctx.editMessageText(`Selected date: ${selectedDate}\n\nPlease upload a screenshot or video file.`)
+    } else {
+      // original flow
+      session.state = "waiting_time"
+      await ctx.editMessageText(`Selected date: ${selectedDate}\n\nPlease enter time in any format:`)
+    }
     await ctx.answerCbQuery().catch(() => {})
   } catch (err) {
     console.error("Error in date action:", err)
@@ -1842,8 +1839,19 @@ bot.action(/pay_(.+)/, async (ctx) => {
     const payment = ctx.match[1]
     const session = getSession(ctx.from.id)
     session.data.paymentSystem = payment
-    session.state = "waiting_game_user_id"
-    await ctx.reply("Enter User ID (numbers only):")
+
+    // Simplified flows for Binance and MoneyGo
+    if (payment === 'binance') {
+      session.state = 'waiting_binance_player_id'
+      await ctx.reply("Enter Player ID:")
+    } else if (payment === 'moneygo') {
+      session.state = 'waiting_moneygo_player_id'
+      await ctx.reply("Enter Player ID:")
+    } else {
+      // Original flow for other payments
+      session.state = "waiting_game_user_id"
+      await ctx.reply("Enter User ID (numbers only):")
+    }
     await ctx.answerCbQuery().catch(() => {})
   } catch (err) {
     console.error("Error in pay action:", err)
@@ -1857,21 +1865,28 @@ async function showConfirmation(ctx, session) {
   try {
     session.state = "confirm"
 
-    const summary = `📋 Confirm Your Details
+    let summary = `📋 Confirm Your Details
 
 country: ${safe(session.data.country)}
 issueType: ${safe(session.data.issueType)}
 paymentSystem: ${safe(session.data.paymentSystem)}
-gameUserId: ${safe(session.data.gameUserId)}
-phoneNumber: ${safe(session.data.phoneNumber)}
-agentNumber: ${safe(session.data.agentNumber)}
-selectedDate: ${safe(session.data.selectedDate)}
-selectedTime: ${safe(session.data.selectedTime)}
-amount: ${safe(session.data.amount)}
-trxId: ${safe(session.data.trxId)}
-fileName: ${safe(session.data.fileName)}
+gameUserId: ${safe(session.data.gameUserId)}`
 
-Is this information correct?`
+    // Add fields based on payment type
+    if (session.data.paymentSystem === 'binance') {
+      summary += `\nBinance UID / TXID: ${safe(session.data.binanceUid)}`
+    } else if (session.data.paymentSystem === 'moneygo') {
+      summary += `\nMoneyGo Number: ${safe(session.data.moneygoNumber)}`
+    } else {
+      summary += `\nphoneNumber: ${safe(session.data.phoneNumber)}`
+      summary += `\nagentNumber: ${safe(session.data.agentNumber)}`
+      summary += `\ntrxId: ${safe(session.data.trxId)}`
+    }
+
+    summary += `\namount: ${safe(session.data.amount)}`
+    summary += `\nselectedDate: ${safe(session.data.selectedDate)}`
+    summary += `\nfileName: ${safe(session.data.fileName)}`
+    summary += `\n\nIs this information correct?`
 
     if (session.data.fileType === "photo") {
       await ctx.replyWithPhoto(session.data.fileId, { caption: summary })
@@ -1925,7 +1940,7 @@ bot.action("submit_player", async (ctx) => {
 
     await updateUser(userId, { isPlayer: true })
 
-    const message = `🎫 Player Request\nTrack ID: ${trackId}
+    let message = `🎫 Player Request\nTrack ID: ${trackId}
 
 User: ${ctx.from.first_name} ${username ? `(@${username})` : "(no username)"}
 Telegram ID: ${userId}
@@ -1933,13 +1948,20 @@ Telegram ID: ${userId}
 Country: ${safe(session.data.country)}
 Issue: ${safe(session.data.issueType)}
 Payment: ${safe(session.data.paymentSystem)}
-Game User ID: ${safe(session.data.gameUserId)}
-Phone Number: ${safe(session.data.phoneNumber)}
-Agent Number: ${safe(session.data.agentNumber)}
-Date: ${safe(session.data.selectedDate)}
-Time: ${safe(session.data.selectedTime)}
-Amount: ${safe(session.data.amount)}
-Transaction ID: ${safe(session.data.trxId)}`
+Game User ID: ${safe(session.data.gameUserId)}`
+
+    if (session.data.paymentSystem === 'binance') {
+      message += `\nBinance UID / TXID: ${safe(session.data.binanceUid)}`
+    } else if (session.data.paymentSystem === 'moneygo') {
+      message += `\nMoneyGo Number: ${safe(session.data.moneygoNumber)}`
+    } else {
+      message += `\nPhone Number: ${safe(session.data.phoneNumber)}`
+      message += `\nAgent Number: ${safe(session.data.agentNumber)}`
+      message += `\nTransaction ID: ${safe(session.data.trxId)}`
+    }
+
+    message += `\nAmount: ${safe(session.data.amount)}`
+    message += `\nDate: ${safe(session.data.selectedDate)}`
 
     for (const admin of ADMIN_IDS) {
       try {
@@ -1994,7 +2016,7 @@ Transaction ID: ${safe(session.data.trxId)}`
   }
 })
 
-// ================= TEXT HANDLER (UPDATED WITH ADMIN MENU LOGIC AND HTML FIX) =================
+// ================= TEXT HANDLER =================
 bot.on("text", async (ctx) => {
   console.log("📝 text received from", ctx.from.id, ":", ctx.message.text)
   try {
@@ -2002,12 +2024,11 @@ bot.on("text", async (ctx) => {
     const userId = ctx.from.id
     const text = ctx.message.text
 
-    // === LOG SESSION STATE FOR ADMINS ===
     if (ADMIN_IDS.includes(userId)) {
       console.log("   Admin session state:", session.state)
     }
 
-    // ===== 1. HANDLE ADMIN BROADCAST MESSAGE =====
+    // ===== 1. ADMIN BROADCAST MESSAGE =====
     if (ADMIN_IDS.includes(userId) && session.state === "admin_broadcast_message") {
       const message = text
       const category = session.broadcastCategory
@@ -2040,7 +2061,7 @@ bot.on("text", async (ctx) => {
       return
     }
 
-    // ===== 2. HANDLE ADMIN REPLY =====
+    // ===== 2. ADMIN REPLY =====
     if (ADMIN_IDS.includes(userId) && session.state === "admin_reply") {
       const targetUserId = session.data.targetUserId
       if (!targetUserId) {
@@ -2060,7 +2081,7 @@ bot.on("text", async (ctx) => {
       return
     }
 
-    // ===== 3. HANDLE PROMO CODE WAITING =====
+    // ===== 3. PROMO CODE WAITING =====
     if (session.state === "waiting_promo_code") {
       console.log("📝 Promo code received:", text)
       const promoCode = text.trim()
@@ -2073,45 +2094,85 @@ bot.on("text", async (ctx) => {
       return
     }
 
-    // ===== 4. HANDLE SUPPORT FLOW (for both users and admins in support states) =====
+    // ===== 4. BINANCE FLOW =====
+    if (session.state === "waiting_binance_player_id") {
+      session.data.gameUserId = text
+      session.state = "waiting_binance_uid"
+      ctx.reply("Enter Binance UID / TXID:")
+      return
+    }
+    if (session.state === "waiting_binance_uid") {
+      session.data.binanceUid = text
+      session.state = "waiting_binance_amount"
+      ctx.reply("Enter Amount:")
+      return
+    }
+    if (session.state === "waiting_binance_amount") {
+      session.data.amount = text
+      session.state = "waiting_binance_date"
+      showCalendar(ctx, session)
+      return
+    }
+
+    // ===== 5. MONEYGO FLOW =====
+    if (session.state === "waiting_moneygo_player_id") {
+      session.data.gameUserId = text
+      session.state = "waiting_moneygo_number"
+      ctx.reply("Enter MoneyGo Number:")
+      return
+    }
+    if (session.state === "waiting_moneygo_number") {
+      session.data.moneygoNumber = text
+      session.state = "waiting_moneygo_amount"
+      ctx.reply("Enter Amount:")
+      return
+    }
+    if (session.state === "waiting_moneygo_amount") {
+      session.data.amount = text
+      session.state = "waiting_moneygo_date"
+      showCalendar(ctx, session)
+      return
+    }
+
+    // ===== 6. SUPPORT FLOW (original) =====
     if (session.state === "waiting_game_user_id") {
       session.data.gameUserId = text
       session.state = "waiting_phone_number"
       ctx.reply("Enter Phone Number (format: +880XXXXXXXXXXX):")
       return
     }
-    else if (session.state === "waiting_phone_number") {
+    if (session.state === "waiting_phone_number") {
       session.data.phoneNumber = text
       session.state = "waiting_agent_number"
       ctx.reply("Enter Agent Number:")
       return
     }
-    else if (session.state === "waiting_agent_number") {
+    if (session.state === "waiting_agent_number") {
       session.data.agentNumber = text
       session.state = "waiting_date"
       showCalendar(ctx, session)
       return
     }
-    else if (session.state === "waiting_time") {
+    if (session.state === "waiting_time") {
       session.data.selectedTime = text
       session.state = "waiting_amount"
       ctx.reply("Enter Amount:")
       return
     }
-    else if (session.state === "waiting_amount") {
+    if (session.state === "waiting_amount") {
       session.data.amount = text
       session.state = "waiting_trx_id"
       ctx.reply("Enter Transaction ID (Trx ID):")
       return
     }
-    else if (session.state === "waiting_trx_id") {
+    if (session.state === "waiting_trx_id") {
       session.data.trxId = text
       session.state = "waiting_file"
       ctx.reply("Please upload a screenshot or video file.")
       return
     }
 
-    // ===== 5. ADMIN MENU COMMANDS (when no session state) =====
+    // ===== 7. ADMIN MENU COMMANDS =====
     if (ADMIN_IDS.includes(userId) && !session.state) {
       if (text.includes("Deposit Problems")) {
         showTicketList(ctx, "deposit", 0)
@@ -2167,11 +2228,10 @@ bot.on("text", async (ctx) => {
           ])
         )
       }
-      // If no admin menu command matched, do nothing (ignore)
       return
     }
 
-    // ===== 6. USER REPLY TO ADMIN (non‑admin, no session state) =====
+    // ===== 8. USER REPLY TO ADMIN =====
     if (!ADMIN_IDS.includes(userId) && !session.state) {
       const adminId = userLastAdmin[userId]
       if (adminId) {
@@ -2191,7 +2251,6 @@ bot.on("text", async (ctx) => {
       return
     }
 
-    // If we reach here, the message was not handled (should not happen)
     console.log("⚠️ Unhandled message:", text)
 
   } catch (err) {

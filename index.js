@@ -886,7 +886,7 @@ bot.action("affiliate_manager", async (ctx) => {
   }
 })
 
-// ================= FIXED MANAGER COUNTRY ACTION =================
+// ================= FIXED MANAGER COUNTRY ACTION (USING HTML) =================
 bot.action(/manager_country_(.+)/, async (ctx) => {
   console.log("🔘 manager_country action triggered with", ctx.match[1])
   try {
@@ -908,38 +908,33 @@ bot.action(/manager_country_(.+)/, async (ctx) => {
     }
     const countryName = countryNames[country] || country
 
-    const message = `✅ **${texts.manager_contact_for} ${countryName}**\n\n` +
+    // Use HTML formatting to avoid underscore issues
+    const message = `<b>✅ ${texts.manager_contact_for} ${countryName}</b>\n\n` +
       `${texts.manager}: ${managerUsername}\n\n` +
       `You can feel free to contact this manager anytime for assistance. They will help you with any questions regarding promotions, commissions, and account management.\n\n` +
       `${texts.click_button_to_contact}`
 
     try {
-      await ctx.editMessageText(
-        message,
-        {
-          parse_mode: "Markdown",
-          reply_markup: {
-            inline_keyboard: [
-              [Markup.button.url(`📞 ${texts.contact} ${countryName} ${texts.manager}`, `https://t.me/${managerUsername.replace('@', '')}`)],
-              [Markup.button.callback(texts.main_menu, "main_menu")]
-            ]
-          }
+      await ctx.editMessageText(message, {
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [
+            [Markup.button.url(`📞 ${texts.contact} ${countryName} ${texts.manager}`, `https://t.me/${managerUsername.replace('@', '')}`)],
+            [Markup.button.callback(texts.main_menu, "main_menu")]
+          ]
         }
-      )
+      })
     } catch (editErr) {
       console.log("Could not edit message, sending new message instead:", editErr.message)
-      await ctx.reply(
-        message,
-        {
-          parse_mode: "Markdown",
-          reply_markup: {
-            inline_keyboard: [
-              [Markup.button.url(`📞 ${texts.contact} ${countryName} ${texts.manager}`, `https://t.me/${managerUsername.replace('@', '')}`)],
-              [Markup.button.callback(texts.main_menu, "main_menu")]
-            ]
-          }
+      await ctx.reply(message, {
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [
+            [Markup.button.url(`📞 ${texts.contact} ${countryName} ${texts.manager}`, `https://t.me/${managerUsername.replace('@', '')}`)],
+            [Markup.button.callback(texts.main_menu, "main_menu")]
+          ]
         }
-      )
+      })
     }
   } catch (err) {
     console.error("Error in manager_country action:", err)

@@ -172,7 +172,6 @@ function formatUser(user) {
   return `ID: ${user.userId}`
 }
 
-// For ctx-based display (when we have the ctx object)
 function displayUser(ctx) {
   if (ctx.from.username) return `@${ctx.from.username}`
   return `ID: ${ctx.from.id} (no username)`
@@ -237,6 +236,48 @@ async function saveSubmission(data) {
   }
 }
 
+// ================= COUNTRY-SPECIFIC AGENT COMMISSION CONFIG =================
+const countryConfig = {
+  bangladesh: {
+    depositCommission: "5%",
+    withdrawalCommission: "2%",
+    prepay: "$80 (refundable)"
+  },
+  india: {
+    depositCommission: "8%",
+    withdrawalCommission: "2%",
+    prepay: "$50 (refundable)"
+  },
+  pakistan: {
+    depositCommission: "8%",
+    withdrawalCommission: "2",
+    prepay: "$50 (refundable)"
+  },
+  egypt: {
+    depositCommission: "4%",
+    withdrawalCommission: "2%",
+    prepay: "$100 (refundable)"
+  },
+  turkey: {
+    depositCommission: "3%",
+    withdrawalCommission: "2%",
+    prepay: "$100 (refundable)"
+  },
+  thailand: {
+    depositCommission: "5%",
+    withdrawalCommission: "2%",
+    prepay: "$100 (refundable)"
+  }
+};
+
+function getCountryConfig(country) {
+  return countryConfig[country] || {
+    depositCommission: "5%",
+    withdrawalCommission: "2%",
+    prepay: "$100 (refundable)"
+  };
+}
+
 // ================= TRANSLATIONS =================
 const translations = {
   en: {
@@ -296,9 +337,6 @@ const translations = {
     next: "Next ➡️",
     back_arrow: "⬅️ Back",
     confirm_conditions: "Confirm Conditions",
-    deposit_commission: "Deposit Commission: 0.5%",
-    withdrawal_commission: "Withdrawal Commission: 0.3%",
-    prepay_requirement: "Prepay required: $100 (refundable)",
     are_you_okay: "Are you okay with these terms? 😊",
     accept: "✅ Accept",
     reject: "❌ Reject",
@@ -504,7 +542,14 @@ async function showAgentConfirmation(ctx, country) {
     }
     const countryName = countryNames[country] || country
 
-    const confirmationMessage = `**${texts.confirm_conditions}** ⭐\n\n⭐ ${texts.deposit_commission}\n⭐ ${texts.withdrawal_commission}\n⭐ ${texts.prepay_requirement}\n\n${texts.are_you_okay} 😊`
+    // Get country-specific commission details
+    const config = getCountryConfig(country)
+
+    const confirmationMessage = `**${texts.confirm_conditions}** ⭐\n\n` +
+      `⭐ Deposit Commission: ${config.depositCommission}\n` +
+      `⭐ Withdrawal Commission: ${config.withdrawalCommission}\n` +
+      `⭐ Prepay required: ${config.prepay}\n\n` +
+      `${texts.are_you_okay} 😊`
 
     await ctx.editMessageText(
       confirmationMessage,
@@ -926,7 +971,7 @@ bot.action(/broadcast_(.+)/, async (ctx) => {
   const session = getSession(adminId)
   session.state = "admin_broadcast_message"
   session.broadcastCategory = category
-  await ctx.editMessageText(`📢 You selected: **${category}**.\nNow type the message to broadcast.`)
+  await ctx.editMessageText(`📢 You selected: **${category}**.\nNow type the message or send a photo/video to broadcast.`)
   await ctx.answerCbQuery().catch(() => {})
 })
 
@@ -937,7 +982,7 @@ async function showUserList(ctx, flag, displayName) {
     const usersList = await getUsersByFlag(flag)
     const total = await countUsersByFlag(flag)
 
-    let msg = `👥 **${displayName}** (Total: ${total})\n\n`
+    let msg = `<b>👥 ${displayName}</b> (Total: ${total})\n\n`
     if (usersList.length === 0) {
       msg += "No users in this category."
     } else {
@@ -946,7 +991,7 @@ async function showUserList(ctx, flag, displayName) {
         msg += `${i+1}. ${name}\n`
       })
     }
-    await ctx.editMessageText(msg, { parse_mode: "Markdown" })
+    await ctx.editMessageText(msg, { parse_mode: "HTML" })
     await ctx.answerCbQuery().catch(() => {})
   } catch (err) {
     console.error(`Error in showUserList for ${displayName}:`, err)
@@ -1043,23 +1088,23 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
 
     const data = ticket.data
     const user = ticket.username ? `@${ticket.username}` : `ID: ${ticket.userId}`
-    const details = `🎫 **Ticket ${trackId}**
+    const details = `<b>🎫 Ticket ${trackId}</b>
 
-**User:** ${user}
-**Country:** ${safe(data.country)}
-**Issue:** ${safe(data.issueType)}
-**Payment:** ${safe(data.paymentSystem)}
-**Game User ID:** ${safe(data.gameUserId)}
-**Phone:** ${safe(data.phoneNumber)}
-**Agent:** ${safe(data.agentNumber)}
-**Date:** ${safe(data.selectedDate)}
-**Time:** ${safe(data.selectedTime)}
-**Amount:** ${safe(data.amount)}
-**Trx ID:** ${safe(data.trxId)}
-**File:** ${safe(data.fileName)}`
+<b>User:</b> ${user}
+<b>Country:</b> ${safe(data.country)}
+<b>Issue:</b> ${safe(data.issueType)}
+<b>Payment:</b> ${safe(data.paymentSystem)}
+<b>Game User ID:</b> ${safe(data.gameUserId)}
+<b>Phone:</b> ${safe(data.phoneNumber)}
+<b>Agent:</b> ${safe(data.agentNumber)}
+<b>Date:</b> ${safe(data.selectedDate)}
+<b>Time:</b> ${safe(data.selectedTime)}
+<b>Amount:</b> ${safe(data.amount)}
+<b>Trx ID:</b> ${safe(data.trxId)}
+<b>File:</b> ${safe(data.fileName)}`
 
     await ctx.editMessageText(details, {
-      parse_mode: "Markdown",
+      parse_mode: "HTML",
       reply_markup: {
         inline_keyboard: [
           [
@@ -1173,7 +1218,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
                 x="50%" 
                 y="85%" 
                 text-anchor="middle" 
-                font-family="Bebas Neue', 'Anton', 'Oswald', Arial Black, Arial, sans-serif"
+                font-family="Azo Sans Uber, 'Arial Black', Impact, sans-serif"
                 font-size="${fontSize}" 
                 font-weight="900"
                 fill="#ff00a2" 
@@ -1306,13 +1351,54 @@ async function deliverPromoMaterials(ctx, session, userId) {
   }
 }
 
-// ================= FILE HANDLER =================
+// ================= FILE HANDLER (for user uploads) =================
 bot.on(["photo", "video"], async (ctx) => {
   console.log("📎 file received from", ctx.from.id)
   try {
     const session = getSession(ctx.from.id)
     const userId = ctx.from.id
 
+    // If this is an admin in broadcast state, handle broadcast file
+    if (ADMIN_IDS.includes(userId) && session.state === "admin_broadcast_message") {
+      const category = session.broadcastCategory
+      const caption = ctx.message.caption || ""
+
+      let targetUserIds = []
+      if (category === 'all') {
+        targetUserIds = await getAllUserIds()
+      } else {
+        const flag = category === 'players' ? 'isPlayer' : (category === 'affiliates' ? 'isAffiliate' : 'isAgent')
+        const users = await User.find({ [flag]: true }, 'userId')
+        targetUserIds = users.map(u => u.userId)
+      }
+
+      const total = targetUserIds.length
+      ctx.reply(`Broadcasting file to ${total} users in category "${category}"...`)
+
+      let successCount = 0
+      let failCount = 0
+
+      const fileId = ctx.message.photo
+        ? ctx.message.photo.pop().file_id
+        : ctx.message.video.file_id
+      const fileType = ctx.message.photo ? 'photo' : 'video'
+
+      const promises = targetUserIds.map(uid => {
+        const sendPromise = fileType === 'photo'
+          ? bot.telegram.sendPhoto(uid, fileId, { caption })
+          : bot.telegram.sendVideo(uid, fileId, { caption })
+        return sendPromise.then(() => successCount++).catch(() => failCount++)
+      })
+
+      Promise.all(promises).then(() => {
+        ctx.reply(`✅ Broadcast finished.\nSent: ${successCount}\nFailed: ${failCount}`)
+      })
+
+      clearSession(userId)
+      return
+    }
+
+    // Otherwise, handle normal user file upload in support flow
     if (!ADMIN_IDS.includes(userId) && !session.state) {
       const adminId = userLastAdmin[userId]
       if (adminId) {
@@ -1345,6 +1431,7 @@ bot.on(["photo", "video"], async (ctx) => {
       return
     }
 
+    // Support flow file upload
     if (session.state !== "waiting_file") return
 
     if (ctx.message.photo) {
@@ -1893,7 +1980,7 @@ Transaction ID: ${safe(session.data.trxId)}`
   }
 })
 
-// ================= TEXT HANDLER (UPDATED WITH ADMIN MENU LOGIC) =================
+// ================= TEXT HANDLER (UPDATED WITH ADMIN MENU LOGIC AND HTML FIX) =================
 bot.on("text", async (ctx) => {
   console.log("📝 text received from", ctx.from.id, ":", ctx.message.text)
   try {
@@ -2020,14 +2107,14 @@ bot.on("text", async (ctx) => {
         if (agentRequests.length === 0) {
           return ctx.reply("No agent requests yet.")
         }
-        let msg = "🤝 **Agent Requests**\n\n"
+        let msg = "<b>🤝 Agent Requests</b>\n\n"
         const recent = [...agentRequests].reverse().slice(0, 10)
         recent.forEach((req, i) => {
           const user = req.username ? `@${req.username}` : `ID: ${req.userId}`
           const status = req.interested ? "✅ Accepted" : "❌ Rejected"
           msg += `${i+1}. ${user} | ${req.country} | ${status} | ${new Date(req.timestamp).toLocaleString()}\n`
         })
-        ctx.reply(msg, { parse_mode: "Markdown" })
+        ctx.reply(msg, { parse_mode: "HTML" })
       } else if (text.includes("Broadcast")) {
         const session = getSession(ctx.from.id)
         session.state = "admin_broadcast_category"
@@ -2045,13 +2132,13 @@ bot.on("text", async (ctx) => {
         if (promoActivities.length === 0) {
           return ctx.reply("No promo activity yet.")
         }
-        let msg = "📊 **Promo Banner Requests**\n\n"
+        let msg = "<b>📊 Promo Banner Requests</b>\n\n"
         const recent = [...promoActivities].reverse().slice(0, 10)
         recent.forEach((p, i) => {
           const user = p.username ? `@${p.username}` : `ID: ${p.userId}`
-          msg += `${i+1}. ${user} | Code: **${p.promoCode}** | Lang: ${p.language} | Cat: ${p.category} | ${new Date(p.timestamp).toLocaleString()}\n`
+          msg += `${i+1}. ${user} | Code: <b>${p.promoCode}</b> | Lang: ${p.language} | Cat: ${p.category} | ${new Date(p.timestamp).toLocaleString()}\n`
         })
-        ctx.reply(msg, { parse_mode: "Markdown" })
+        ctx.reply(msg, { parse_mode: "HTML" })
       } else if (text.includes("Generate Promo")) {
         await startPromoLanguageSelection(ctx)
       } else if (text.includes("Users")) {

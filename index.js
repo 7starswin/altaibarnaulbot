@@ -862,12 +862,15 @@ bot.action(/manager_country_(.+)/, async (ctx) => {
   console.log("🔘 manager_country action triggered with", ctx.match[1])
   // Always answer callback to prevent hanging buttons
   try {
+    // First answer the callback to avoid timeout
+    await ctx.answerCbQuery().catch(() => {})
+
+    // Check phone (though they should have it from affiliate_manager)
     if (!(await ensurePhone(ctx))) {
-      await ctx.answerCbQuery().catch(() => {});
-      return;
+      return
     }
+
     const country = ctx.match[1]
-    const userId = ctx.from.id
     const texts = loadLanguage("en")
 
     const managerUsername = "@Contact_7starswinpartners"
@@ -886,23 +889,38 @@ bot.action(/manager_country_(.+)/, async (ctx) => {
       `You can feel free to contact this manager anytime for assistance. They will help you with any questions regarding promotions, commissions, and account management.\n\n` +
       `${texts.click_button_to_contact}`
 
-    await ctx.editMessageText(
-      message,
-      {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [Markup.button.url(`📞 ${texts.contact} ${countryName} ${texts.manager}`, `https://t.me/${managerUsername.replace('@', '')}`)],
-            [Markup.button.callback(texts.main_menu, "main_menu")]
-          ]
+    // Try to edit the original message; if it fails, send a new message
+    try {
+      await ctx.editMessageText(
+        message,
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [Markup.button.url(`📞 ${texts.contact} ${countryName} ${texts.manager}`, `https://t.me/${managerUsername.replace('@', '')}`)],
+              [Markup.button.callback(texts.main_menu, "main_menu")]
+            ]
+          }
         }
-      }
-    )
-    await ctx.answerCbQuery().catch(() => {})
+      )
+    } catch (editErr) {
+      console.log("Could not edit message, sending new message instead:", editErr.message)
+      await ctx.reply(
+        message,
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [Markup.button.url(`📞 ${texts.contact} ${countryName} ${texts.manager}`, `https://t.me/${managerUsername.replace('@', '')}`)],
+              [Markup.button.callback(texts.main_menu, "main_menu")]
+            ]
+          }
+        }
+      )
+    }
   } catch (err) {
     console.error("Error in manager_country action:", err)
     try {
-      await ctx.answerCbQuery("Sorry, an error occurred. Please try again.").catch(() => {});
       await ctx.reply("❌ An error occurred. Please try again later.").catch(() => {});
     } catch {}
   }

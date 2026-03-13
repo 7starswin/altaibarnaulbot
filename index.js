@@ -201,10 +201,11 @@ async function ensureFolder(folderPath) {
   }
 }
 
-async function getImageFiles(folderPath) {
+// Get all media files (images and videos)
+async function getMediaFiles(folderPath) {
   try {
     const files = await fs.readdir(folderPath)
-    return files.filter(f => f.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i))
+    return files.filter(f => f.match(/\.(jpg|jpeg|png|gif|bmp|webp|mp4|mov|avi|mkv)$/i))
   } catch (err) {
     return []
   }
@@ -327,6 +328,7 @@ const translations = {
     category_not_available: "Selected category not available.",
     no_banners_available: "No banners available for {language}/{category}.",
     processing_banners: "Processing {count} banners with promo '{promo}' in {language}/{category}...",
+    processing_videos: "Videos will be sent without text overlay (video overlay not supported).",
     complete: "Complete",
     banners_delivered_success: "✅ {count} banners delivered with your promo code '{promo}' in {language}/{category}!",
     banners_delivered_with_failures: "✅ {count} banners delivered with promo '{promo}' in {language}/{category}. Failed: {failed}",
@@ -358,7 +360,7 @@ const translations = {
     manager_anytime_contact: "You can contact our manager anytime for questions:",
     error_processing_response: "Error processing your response. Please try again later."
   }
-}
+};
 
 function loadLanguage(lang) {
   return translations[lang] || translations.en
@@ -875,10 +877,14 @@ bot.action(/manager_country_(.+)/, async (ctx) => {
     }
     const countryName = countryNames[country] || country
 
-    await ctx.editMessageText(
-      `✅ **${texts.manager_contact_for} ${countryName}**\n\n` +
+    // Fixed message with friendly text and direct contact button
+    const message = `✅ **${texts.manager_contact_for} ${countryName}**\n\n` +
       `${texts.manager}: ${managerUsername}\n\n` +
-      `${texts.click_button_to_contact}`,
+      `You can feel free to contact this manager anytime for assistance. They will help you with any questions regarding promotions, commissions, and account management.\n\n` +
+      `${texts.click_button_to_contact}`
+
+    await ctx.editMessageText(
+      message,
       {
         parse_mode: "Markdown",
         reply_markup: {
@@ -1135,7 +1141,7 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
   }
 })
 
-// ================= DELIVER PROMO MATERIALS =================
+// ================= DELIVER PROMO MATERIALS (WITH VIDEO SUPPORT) =================
 async function deliverPromoMaterials(ctx, session, userId) {
   console.log("🚀 deliverPromoMaterials started for user", userId)
   try {
@@ -1173,7 +1179,9 @@ async function deliverPromoMaterials(ctx, session, userId) {
 
     console.log(`🎯 Processing promo for ${bannerLanguage}/${promoCategory}, categories:`, categories)
 
-    let allImageFiles = []
+    // Collect all media files (images and videos) from all relevant categories
+    let allMediaFiles = []
+    let hasVideos = false
     for (const cat of categories) {
       const folderPath = path.join(__dirname, 'assets', bannerLanguage, cat, 'banners')
       console.log(`📁 Checking folder: ${folderPath}`)
@@ -1183,32 +1191,46 @@ async function deliverPromoMaterials(ctx, session, userId) {
         console.log(`❌ Folder does not exist: ${folderPath}`)
         continue
       }
-      const files = await getImageFiles(folderPath)
+      const files = await getMediaFiles(folderPath)
       console.log(`   Found ${files.length} files in ${cat}:`, files)
       const withCat = files.map(f => ({ cat, file: f }))
-      allImageFiles = allImageFiles.concat(withCat)
+      allMediaFiles = allMediaFiles.concat(withCat)
+      // Check if any video files are present
+      if (files.some(f => f.match(/\.(mp4|mov|avi|mkv)$/i))) {
+        hasVideos = true
+      }
     }
 
-    if (allImageFiles.length === 0) {
-      console.log("⚠️ No banner files found")
+    if (allMediaFiles.length === 0) {
+      console.log("⚠️ No media files found")
       await ctx.reply(`⚠️ No banners found for ${bannerLanguage}/${promoCategory}. Please check your assets.`)
       return
     }
 
-    await ctx.reply(`📄 Processing ${allImageFiles.length} banners with promo '${promoCode}' in ${bannerLanguage}/${promoCategory}...`)
+    // If videos are present, inform the user that they will be sent without overlay
+    if (hasVideos) {
+      await ctx.reply(texts.processing_videos)
+    }
+
+    await ctx.reply(`📄 Processing ${allMediaFiles.length} banners with promo '${promoCode}' in ${bannerLanguage}/${promoCategory}...`)
 
     const tempFolder = path.join(__dirname, 'temp', userId.toString())
     await ensureFolder(tempFolder)
-    console.log("📁 Temp folder:", tempFolder)
 
     let sentCount = 0
     let failedCount = 0
-    const processedImages = []
+    const processedMedia = [] // for images we process, for videos we just copy?
 
+    // For images, we need to overlay text. For videos, we'll send as is (no overlay)
+    // We'll separate images and videos
+    const imageFiles = allMediaFiles.filter(m => m.file.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i))
+    const videoFiles = allMediaFiles.filter(m => m.file.match(/\.(mp4|mov|avi|mkv)$/i))
+
+    // Process images with overlay (concurrent)
     const concurrencyLimit = 5
-    for (let i = 0; i < allImageFiles.length; i += concurrencyLimit) {
-      const chunk = allImageFiles.slice(i, i + concurrencyLimit)
-      console.log(`🔄 Processing chunk ${i / concurrencyLimit + 1} with ${chunk.length} images`)
+    for (let i = 0; i < imageFiles.length; i += concurrencyLimit) {
+      const chunk = imageFiles.slice(i, i + concurrencyLimit)
+      console.log(`🔄 Processing image chunk ${i / concurrencyLimit + 1} with ${chunk.length} images`)
       const promises = chunk.map(async ({ cat, file }) => {
         try {
           const inputPath = path.join(__dirname, 'assets', bannerLanguage, cat, 'banners', file)
@@ -1242,9 +1264,9 @@ async function deliverPromoMaterials(ctx, session, userId) {
             .jpeg({ quality: 95 })
             .toFile(outputPath)
 
-          return outputPath
+          return { type: 'photo', path: outputPath }
         } catch (err) {
-          console.error(`❌ Error processing ${cat}/${file}:`, err)
+          console.error(`❌ Error processing image ${cat}/${file}:`, err)
           return null
         }
       })
@@ -1252,7 +1274,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
       const results = await Promise.all(promises)
       for (const res of results) {
         if (res) {
-          processedImages.push(res)
+          processedMedia.push(res)
           sentCount++
         } else {
           failedCount++
@@ -1260,25 +1282,46 @@ async function deliverPromoMaterials(ctx, session, userId) {
       }
     }
 
-    if (processedImages.length === 0) {
-      console.log("❌ No banners could be generated")
+    // For videos, we just use the original file (no overlay)
+    for (const { cat, file } of videoFiles) {
+      try {
+        const inputPath = path.join(__dirname, 'assets', bannerLanguage, cat, 'banners', file)
+        // Copy to temp folder to keep all files together? Not necessary, we can send directly.
+        // But for consistency, we can send directly from original location.
+        // However, the original might be deleted? No, it's read-only. So we can send directly.
+        processedMedia.push({ type: 'video', path: inputPath })
+        sentCount++
+      } catch (err) {
+        console.error(`❌ Error processing video ${cat}/${file}:`, err)
+        failedCount++
+      }
+    }
+
+    if (processedMedia.length === 0) {
+      console.log("❌ No media could be generated/sent")
       await ctx.reply("❌ No banners could be generated. Please try again later.")
       clearSession(userId)
       return
     }
 
-    console.log(`✅ Generated ${processedImages.length} images, sending...`)
+    console.log(`✅ Prepared ${processedMedia.length} items for sending...`)
 
+    // Send media – we cannot mix photos and videos in a media group, so send separately
+    // First send all images (in groups of 10)
+    const imageItems = processedMedia.filter(m => m.type === 'photo')
+    const videoItems = processedMedia.filter(m => m.type === 'video')
+
+    // Send images in groups
     const groupSize = 10
-    for (let i = 0; i < processedImages.length; i += groupSize) {
-      const group = processedImages.slice(i, i + groupSize)
+    for (let i = 0; i < imageItems.length; i += groupSize) {
+      const group = imageItems.slice(i, i + groupSize).map(m => m.path)
       const mediaGroup = group.map(imgPath => ({
         type: 'photo',
         media: { source: imgPath }
       }))
       try {
         await ctx.replyWithMediaGroup(mediaGroup)
-        console.log(`📤 Sent group of ${group.length} images via media group`)
+        console.log(`📤 Sent group of ${group.length} images`)
       } catch (err) {
         console.error('Media group failed, sending individually:', err)
         for (const imgPath of group) {
@@ -1293,11 +1336,25 @@ async function deliverPromoMaterials(ctx, session, userId) {
       await delay(1000)
     }
 
-    for (const imgPath of processedImages) {
-      try { await fs.unlink(imgPath) } catch {}
+    // Send videos individually (can't group videos with photos)
+    for (const { path: videoPath } of videoItems) {
+      try {
+        await ctx.replyWithVideo({ source: videoPath })
+        await delay(1000)
+      } catch (err) {
+        console.error('Failed to send video:', err)
+      }
+    }
+
+    // Cleanup temp files (only the processed images are in temp)
+    for (const item of processedMedia) {
+      if (item.type === 'photo') {
+        try { await fs.unlink(item.path) } catch {}
+      }
     }
     try { await fs.rmdir(tempFolder) } catch {}
 
+    // Save promo activity
     promoActivities.push({
       userId,
       username: ctx.from.username,
@@ -1305,7 +1362,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
       language: bannerLanguage,
       category: promoCategory,
       filesDelivered: sentCount,
-      totalFiles: allImageFiles.length,
+      totalFiles: allMediaFiles.length,
       failedFiles: failedCount,
       timestamp: Date.now()
     })
@@ -1320,7 +1377,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
       `Language: ${bannerLanguage.toUpperCase()}\n` +
       `Category: ${promoCategory}\n` +
       `Promo Code: ${promoCode}\n` +
-      `Files Sent: ${sentCount}/${allImageFiles.length}\n` +
+      `Files Sent: ${sentCount}/${allMediaFiles.length}\n` +
       `Failed: ${failedCount}\n` +
       `Date: ${formatDate()}`
     await logToAdmin(bot, ADMIN_IDS, adminMsg)
@@ -1520,7 +1577,6 @@ bot.action(/date_(\d+)/, async (ctx) => {
       session.state = "waiting_moneygo_file"
       await ctx.editMessageText(`Selected date: ${selectedDate}\n\nPlease upload a screenshot or video file.`)
     } else {
-      // original flow
       session.state = "waiting_time"
       await ctx.editMessageText(`Selected date: ${selectedDate}\n\nPlease enter time in any format:`)
     }
@@ -1840,7 +1896,6 @@ bot.action(/pay_(.+)/, async (ctx) => {
     const session = getSession(ctx.from.id)
     session.data.paymentSystem = payment
 
-    // Simplified flows for Binance and MoneyGo
     if (payment === 'binance') {
       session.state = 'waiting_binance_player_id'
       await ctx.reply("Enter Player ID:")
@@ -1848,7 +1903,6 @@ bot.action(/pay_(.+)/, async (ctx) => {
       session.state = 'waiting_moneygo_player_id'
       await ctx.reply("Enter Player ID:")
     } else {
-      // Original flow for other payments
       session.state = "waiting_game_user_id"
       await ctx.reply("Enter User ID (numbers only):")
     }
@@ -1872,7 +1926,6 @@ issueType: ${safe(session.data.issueType)}
 paymentSystem: ${safe(session.data.paymentSystem)}
 gameUserId: ${safe(session.data.gameUserId)}`
 
-    // Add fields based on payment type
     if (session.data.paymentSystem === 'binance') {
       summary += `\nBinance UID / TXID: ${safe(session.data.binanceUid)}`
     } else if (session.data.paymentSystem === 'moneygo') {

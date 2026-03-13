@@ -245,7 +245,7 @@ async function logToAdmin(bot, adminIds, message) {
 
 async function saveSubmission(data) {
   if (data.type === 'agent_response') {
-    // Fetch user's phone from database if available
+    // Fetch user's phone from database
     let userPhone = null
     try {
       const user = await User.findOne({ userId: data.userId })
@@ -1190,7 +1190,6 @@ async function addTextToVideo(inputPath, outputPath, text) {
   return new Promise((resolve, reject) => {
     const tempImagePath = path.join(path.dirname(outputPath), 'temp_overlay.png')
     
-    // Create a transparent image with the text using sharp
     sharp({
       create: {
         width: 100,

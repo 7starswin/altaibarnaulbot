@@ -206,6 +206,7 @@ async function getMediaFiles(folderPath) {
     const files = await fs.readdir(folderPath)
     return files.filter(f => f.match(/\.(jpg|jpeg|png|gif|bmp|webp|mp4|mov|avi|mkv)$/i))
   } catch (err) {
+    console.error(`Error reading folder ${folderPath}:`, err)
     return []
   }
 }
@@ -860,9 +861,8 @@ bot.action("affiliate_manager", async (ctx) => {
 // ================= FIXED MANAGER COUNTRY ACTION =================
 bot.action(/manager_country_(.+)/, async (ctx) => {
   console.log("🔘 manager_country action triggered with", ctx.match[1])
-  // Always answer callback to prevent hanging buttons
   try {
-    // First answer the callback to avoid timeout
+    // Always answer callback first to prevent timeout
     await ctx.answerCbQuery().catch(() => {})
 
     // Check phone (though they should have it from affiliate_manager)
@@ -1450,6 +1450,7 @@ bot.on(["photo", "video"], async (ctx) => {
 
       let successCount = 0
       let failCount = 0
+      let failedUsers = []
 
       const fileId = ctx.message.photo
         ? ctx.message.photo.pop().file_id
@@ -1460,11 +1461,24 @@ bot.on(["photo", "video"], async (ctx) => {
         const sendPromise = fileType === 'photo'
           ? bot.telegram.sendPhoto(uid, fileId, { caption })
           : bot.telegram.sendVideo(uid, fileId, { caption })
-        return sendPromise.then(() => successCount++).catch(() => failCount++)
+        return sendPromise
+          .then(() => successCount++)
+          .catch((err) => {
+            failCount++
+            failedUsers.push(uid)
+            console.log(`❌ Failed to broadcast to user ${uid}:`, err.description || err.message)
+          })
       })
 
       Promise.all(promises).then(() => {
         ctx.reply(`✅ Broadcast finished.\nSent: ${successCount}\nFailed: ${failCount}`)
+        if (failedUsers.length > 0) {
+          const failedList = failedUsers.join('\n')
+          ctx.replyWithDocument({
+            source: Buffer.from(failedList),
+            filename: `failed_users_${Date.now()}.txt`
+          }, { caption: `📊 Failed users list (${failedUsers.length} users)` })
+        }
       })
 
       clearSession(userId)
@@ -2115,14 +2129,27 @@ bot.on("text", async (ctx) => {
 
       let successCount = 0
       let failCount = 0
+      let failedUsers = []
+
       const promises = targetUserIds.map(uid =>
         bot.telegram.sendMessage(uid, `📢 Broadcast from admin (${category}):\n\n${message}`)
           .then(() => successCount++)
-          .catch(() => failCount++)
+          .catch((err) => {
+            failCount++
+            failedUsers.push(uid)
+            console.log(`❌ Failed to broadcast to user ${uid}:`, err.description || err.message)
+          })
       )
 
       Promise.all(promises).then(() => {
         ctx.reply(`✅ Broadcast finished.\nSent: ${successCount}\nFailed: ${failCount}`)
+        if (failedUsers.length > 0) {
+          const failedList = failedUsers.join('\n')
+          ctx.replyWithDocument({
+            source: Buffer.from(failedList),
+            filename: `failed_users_${Date.now()}.txt`
+          }, { caption: `📊 Failed users list (${failedUsers.length} users)` })
+        }
       })
 
       clearSession(userId)

@@ -5,6 +5,11 @@ const path = require("path")
 const { Telegraf, Markup } = require("telegraf")
 const sharp = require("sharp")
 const mongoose = require("mongoose")
+const ffmpeg = require('fluent-ffmpeg')
+const ffmpegStatic = require('ffmpeg-static')
+
+// Set ffmpeg path
+ffmpeg.setFfmpegPath(ffmpegStatic)
 
 // ================= MONGODB CONNECTION =================
 const MONGODB_URI = process.env.MONGODB_URI
@@ -177,6 +182,7 @@ async function ensurePhone(ctx) {
 // ================= HELPER: FORMAT USER =================
 function formatUser(user) {
   if (user.username) return `@${user.username}`
+  if (user.phone) return `📞 ${user.phone}`
   return `ID: ${user.userId}`
 }
 
@@ -231,9 +237,16 @@ async function logToAdmin(bot, adminIds, message) {
 
 async function saveSubmission(data) {
   if (data.type === 'agent_response') {
+    // Fetch user's phone from database if available
+    let userPhone = null
+    try {
+      const user = await User.findOne({ userId: data.userId })
+      if (user && user.phone) userPhone = user.phone
+    } catch {}
     const entry = {
       userId: data.userId,
       username: data.username || null,
+      phone: userPhone,
       country: data.data.country,
       response: data.data.response,
       interested: data.data.interested,
@@ -328,7 +341,7 @@ const translations = {
     category_not_available: "Selected category not available.",
     no_banners_available: "No banners available for {language}/{category}.",
     processing_banners: "Processing {count} banners with promo '{promo}' in {language}/{category}...",
-    processing_videos: "Videos will be sent without text overlay (video overlay not supported).",
+    processing_videos: "Processing videos with text overlay (this may take a moment)...",
     complete: "Complete",
     banners_delivered_success: "✅ {count} banners delivered with your promo code '{promo}' in {language}/{category}!",
     banners_delivered_with_failures: "✅ {count} banners delivered with promo '{promo}' in {language}/{category}. Failed: {failed}",
@@ -862,10 +875,10 @@ bot.action("affiliate_manager", async (ctx) => {
 bot.action(/manager_country_(.+)/, async (ctx) => {
   console.log("🔘 manager_country action triggered with", ctx.match[1])
   try {
-    // Always answer callback first to prevent timeout
+    // First answer callback to prevent timeout
     await ctx.answerCbQuery().catch(() => {})
 
-    // Check phone (though they should have it from affiliate_manager)
+    // Check phone (they should have it from affiliate_manager)
     if (!(await ensurePhone(ctx))) {
       return
     }
@@ -1022,7 +1035,7 @@ async function showUserList(ctx, flag, displayName) {
       msg += "No users in this category."
     } else {
       usersList.forEach((u, i) => {
-        const name = u.username ? `@${u.username}` : `ID: ${u.userId}`
+        const name = u.username ? `@${u.username}` : (u.phone ? `📞 ${u.phone}` : `ID: ${u.userId}`)
         msg += `${i+1}. ${name}\n`
       })
     }
@@ -1165,6 +1178,79 @@ bot.action(/^view_(deposit|withdrawal)_(TKT-.+)$/, async (ctx) => {
   }
 })
 
+// ================= VIDEO TEXT OVERLAY FUNCTION =================
+async function addTextToVideo(inputPath, outputPath, text) {
+  return new Promise((resolve, reject) => {
+    // Create a temporary image for the text overlay
+    const tempImagePath = path.join(path.dirname(outputPath), 'temp_overlay.png')
+    
+    // First, create an image with the text using sharp (same style as for banners)
+    sharp({
+      create: {
+        width: 100, // will be scaled
+        height: 100,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0 }
+      }
+    })
+    .composite([{
+      input: Buffer.from(`
+        <svg width="100" height="100">
+          <text 
+            x="50%" 
+            y="50%" 
+            text-anchor="middle" 
+            font-family="Azo Sans Uber, 'Arial Black', Impact, sans-serif"
+            font-size="20" 
+            font-weight="900"
+            fill="#ff00a2" 
+            stroke="black"
+            stroke-width="2"
+            paint-order="stroke"
+            text-transform="uppercase"
+          >${text}</text>
+        </svg>
+      `),
+      top: 0,
+      left: 0
+    }])
+    .png()
+    .toFile(tempImagePath)
+    .then(() => {
+      // Now use ffmpeg to overlay the image on the video
+      ffmpeg(inputPath)
+        .input(tempImagePath)
+        .complexFilter([
+          {
+            filter: 'scale',
+            options: 'iw:ih', // scale image to video size? actually we want to overlay at specific position
+            inputs: '1:v',
+            outputs: 'scaled'
+          },
+          {
+            filter: 'overlay',
+            options: '10:10', // position: adjust as needed (x:y)
+            inputs: ['0:v', 'scaled'],
+            outputs: 'overlayed'
+          }
+        ])
+        .outputOptions('-map', 'overlayed')
+        .outputOptions('-map', '0:a?') // copy audio if present
+        .on('end', () => {
+          // Clean up temp image
+          fs.unlink(tempImagePath).catch(() => {})
+          resolve()
+        })
+        .on('error', (err) => {
+          console.error('ffmpeg error:', err)
+          reject(err)
+        })
+        .save(outputPath)
+    })
+    .catch(reject)
+  })
+}
+
 // ================= DELIVER PROMO MATERIALS =================
 async function deliverPromoMaterials(ctx, session, userId) {
   console.log("🚀 deliverPromoMaterials started for user", userId)
@@ -1203,9 +1289,8 @@ async function deliverPromoMaterials(ctx, session, userId) {
 
     console.log(`🎯 Processing promo for ${bannerLanguage}/${promoCategory}, categories:`, categories)
 
-    // Collect all media files (images and videos) from all relevant categories
+    // Collect all media files
     let allMediaFiles = []
-    let hasVideos = false
     for (const cat of categories) {
       const folderPath = path.join(__dirname, 'assets', bannerLanguage, cat, 'banners')
       console.log(`📁 Checking folder: ${folderPath}`)
@@ -1219,9 +1304,6 @@ async function deliverPromoMaterials(ctx, session, userId) {
       console.log(`   Found ${files.length} files in ${cat}:`, files)
       const withCat = files.map(f => ({ cat, file: f }))
       allMediaFiles = allMediaFiles.concat(withCat)
-      if (files.some(f => f.match(/\.(mp4|mov|avi|mkv)$/i))) {
-        hasVideos = true
-      }
     }
 
     if (allMediaFiles.length === 0) {
@@ -1230,11 +1312,14 @@ async function deliverPromoMaterials(ctx, session, userId) {
       return
     }
 
-    if (hasVideos) {
-      await ctx.reply(texts.processing_videos)
-    }
+    // Separate images and videos
+    const imageFiles = allMediaFiles.filter(m => m.file.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i))
+    const videoFiles = allMediaFiles.filter(m => m.file.match(/\.(mp4|mov|avi|mkv)$/i))
 
     await ctx.reply(`📄 Processing ${allMediaFiles.length} banners with promo '${promoCode}' in ${bannerLanguage}/${promoCategory}...`)
+    if (videoFiles.length > 0) {
+      await ctx.reply(texts.processing_videos)
+    }
 
     const tempFolder = path.join(__dirname, 'temp', userId.toString())
     await ensureFolder(tempFolder)
@@ -1243,10 +1328,7 @@ async function deliverPromoMaterials(ctx, session, userId) {
     let failedCount = 0
     const processedMedia = []
 
-    const imageFiles = allMediaFiles.filter(m => m.file.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i))
-    const videoFiles = allMediaFiles.filter(m => m.file.match(/\.(mp4|mov|avi|mkv)$/i))
-
-    // Process images with overlay
+    // Process images with overlay (sharp)
     const concurrencyLimit = 5
     for (let i = 0; i < imageFiles.length; i += concurrencyLimit) {
       const chunk = imageFiles.slice(i, i + concurrencyLimit)
@@ -1302,11 +1384,14 @@ async function deliverPromoMaterials(ctx, session, userId) {
       }
     }
 
-    // Videos: just use original files
+    // Process videos with ffmpeg
     for (const { cat, file } of videoFiles) {
       try {
         const inputPath = path.join(__dirname, 'assets', bannerLanguage, cat, 'banners', file)
-        processedMedia.push({ type: 'video', path: inputPath })
+        const outputPath = path.join(tempFolder, `${cat}_${promoCode}_${file}`)
+
+        await addTextToVideo(inputPath, outputPath, promoCode)
+        processedMedia.push({ type: 'video', path: outputPath })
         sentCount++
       } catch (err) {
         console.error(`❌ Error processing video ${cat}/${file}:`, err)
@@ -1361,11 +1446,9 @@ async function deliverPromoMaterials(ctx, session, userId) {
       }
     }
 
-    // Cleanup temp files (only processed images)
+    // Cleanup temp files
     for (const item of processedMedia) {
-      if (item.type === 'photo') {
-        try { await fs.unlink(item.path) } catch {}
-      }
+      try { await fs.unlink(item.path) } catch {}
     }
     try { await fs.rmdir(tempFolder) } catch {}
 
@@ -2280,7 +2363,7 @@ bot.on("text", async (ctx) => {
         let msg = "<b>🤝 Agent Requests</b>\n\n"
         const recent = [...agentRequests].reverse().slice(0, 10)
         recent.forEach((req, i) => {
-          const user = req.username ? `@${req.username}` : `ID: ${req.userId}`
+          const user = req.username ? `@${req.username}` : (req.phone ? `📞 ${req.phone}` : `ID: ${req.userId}`)
           const status = req.interested ? "✅ Accepted" : "❌ Rejected"
           msg += `${i+1}. ${user} | ${req.country} | ${status} | ${new Date(req.timestamp).toLocaleString()}\n`
         })
